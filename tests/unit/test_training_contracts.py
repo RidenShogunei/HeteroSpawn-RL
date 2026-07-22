@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
-
 import pytest
 from pydantic import ValidationError
 
@@ -325,9 +323,3 @@ def test_registry_represents_single_shared_heterogeneous_and_frozen() -> None:
     assert frozen.target_for_phase("sub_update") is None
     assert shared.is_shared_trainable
     assert shared.target_for_phase("joint_update") == main
-
-
-def revisions_by_policy(
-    revisions: tuple[tuple[PolicyId, object], ...],
-) -> Mapping[PolicyId, object]:
-    return dict(revisions)

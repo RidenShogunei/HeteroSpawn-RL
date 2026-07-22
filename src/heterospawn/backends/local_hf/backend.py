@@ -96,7 +96,6 @@ class LocalHfLoraBackend:
             torch.cuda.manual_seed_all(config.seed)
 
         self.prompt_encoder = LocalPromptEncoder(tokenizer, config)
-        self._tokenizer = tokenizer
         self._eos_token_id = getattr(tokenizer, "eos_token_id", None)
         self._pad_token_id = getattr(tokenizer, "pad_token_id", self._eos_token_id)
         lora_config = peft.LoraConfig(
