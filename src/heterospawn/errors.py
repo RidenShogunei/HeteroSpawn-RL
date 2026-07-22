@@ -17,6 +17,14 @@ class RolloutRevisionMismatch(HeteroSpawnError):
     """A generation operation reached a rollout service at the wrong revision."""
 
 
+class TrainingBatchError(HeteroSpawnError):
+    """A training batch is empty, inconsistent, or has a conflicting digest."""
+
+
+class CheckpointIntegrityError(HeteroSpawnError):
+    """A checkpoint is unknown or fails immutable identity validation."""
+
+
 class ProviderRequestError(HeteroSpawnError):
     """An external provider request failed after bounded retries."""
 
