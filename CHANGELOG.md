@@ -14,3 +14,4 @@ All notable project changes are recorded here. Architecture-changing decisions a
 - Live MiniMax conformance mode, inline-thinking normalization, scoped smoke scoring, and bounded invalid-schema retry.
 - MiniMax Token Plan MCP search adapter, pinned stdio transport, and live Main/Sub search validation.
 - Reproducible xbench API pilot manifests, repeat-aware exact-only metrics, bounded spawn, safe progress, and aggregate token/latency reporting.
+- Provider-neutral xbench Judge contracts, MiniMax development judging, versioned verdict-format repair, and safe failed-episode/Judge cost accounting.

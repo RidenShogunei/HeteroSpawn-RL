@@ -7,7 +7,7 @@ import json
 
 from heterospawn.benchmarks.xbench import BenchmarkTask
 from heterospawn.domain.ids import AgentInstanceId, EpisodeId, RolloutId
-from heterospawn.errors import InvalidActionError
+from heterospawn.errors import EpisodeRunError, InvalidActionError
 from heterospawn.orchestration.budget import ConcurrencyBudgetLedger
 from heterospawn.orchestration.models import (
     AnswerAction,
@@ -61,19 +61,22 @@ class ApiEpisodeOrchestrator:
     async def run(self, task: BenchmarkTask, episode_id: EpisodeId) -> EpisodeTrace:
         events: list[EpisodeEvent] = []
         attempts: list[MainAttempt] = []
-        initial_action, initial_event_index = await self._generate_main_action(
-            task,
-            episode_id,
-            phase="initial",
-            messages=(
-                Message(role="system", content=self._main_system_prompt),
-                Message(role="user", content=task.prompt),
-            ),
-            events=events,
-            attempts=attempts,
-            causal_event_indices=(),
-            require_answer=False,
-        )
+        try:
+            initial_action, initial_event_index = await self._generate_main_action(
+                task,
+                episode_id,
+                phase="initial",
+                messages=(
+                    Message(role="system", content=self._main_system_prompt),
+                    Message(role="user", content=task.prompt),
+                ),
+                events=events,
+                attempts=attempts,
+                causal_event_indices=(),
+                require_answer=False,
+            )
+        except InvalidActionError:
+            raise _episode_run_error(attempts, (), events) from None
 
         if isinstance(initial_action, AnswerAction):
             return self._trace(
@@ -110,26 +113,29 @@ class ApiEpisodeOrchestrator:
             )
 
         evidence = [result.model_dump(mode="json") for result in sub_results]
-        final_action, _ = await self._generate_main_action(
-            task,
-            episode_id,
-            phase="final",
-            messages=(
-                Message(role="system", content=self._main_system_prompt),
-                Message(role="user", content=task.prompt),
-                Message(
-                    role="user",
-                    content=(
-                        "Sub results follow. Return an ANSWER action only.\n"
-                        + json.dumps(evidence, ensure_ascii=False, sort_keys=True)
+        try:
+            final_action, _ = await self._generate_main_action(
+                task,
+                episode_id,
+                phase="final",
+                messages=(
+                    Message(role="system", content=self._main_system_prompt),
+                    Message(role="user", content=task.prompt),
+                    Message(
+                        role="user",
+                        content=(
+                            "Sub results follow. Return an ANSWER action only.\n"
+                            + json.dumps(evidence, ensure_ascii=False, sort_keys=True)
+                        ),
                     ),
                 ),
-            ),
-            events=events,
-            attempts=attempts,
-            causal_event_indices=tuple(sub_event_indices),
-            require_answer=True,
-        )
+                events=events,
+                attempts=attempts,
+                causal_event_indices=tuple(sub_event_indices),
+                require_answer=True,
+            )
+        except InvalidActionError:
+            raise _episode_run_error(attempts, tuple(sub_results), events) from None
         if not isinstance(final_action, AnswerAction):
             raise AssertionError("final action validation must require ANSWER")
         return self._trace(
@@ -314,3 +320,24 @@ class ApiEpisodeOrchestrator:
             policy_revisions=((self._policy.policy_id, self._policy.revision),),
             trainable=False,
         )
+
+
+def _episode_run_error(
+    attempts: list[MainAttempt],
+    sub_results: tuple[SubResult, ...],
+    events: list[EpisodeEvent],
+) -> EpisodeRunError:
+    usages = [attempt.usage for attempt in attempts]
+    usages.extend(result.policy_usage for result in sub_results if result.policy_usage is not None)
+    return EpisodeRunError(
+        error_code="InvalidActionError",
+        spawn_count=len(sub_results),
+        successful_subs=sum(result.status == "success" for result in sub_results),
+        failed_subs=sum(result.status == "failed" for result in sub_results),
+        main_attempts=len(attempts),
+        invalid_main_attempts=sum(not attempt.valid for attempt in attempts),
+        event_count=len(events),
+        prompt_tokens=sum(usage.prompt_tokens for usage in usages),
+        completion_tokens=sum(usage.completion_tokens for usage in usages),
+        total_tokens=sum(usage.total_tokens for usage in usages),
+    )
