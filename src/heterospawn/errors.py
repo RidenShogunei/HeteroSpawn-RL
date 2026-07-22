@@ -21,5 +21,13 @@ class ProviderRequestError(HeteroSpawnError):
     """An external provider request failed after bounded retries."""
 
 
+class SearchRequestError(HeteroSpawnError):
+    """An external search request failed after bounded retries."""
+
+
 class BenchmarkDataError(HeteroSpawnError):
     """Benchmark input is missing, malformed, or unsafe to expose."""
+
+
+class InvalidActionError(HeteroSpawnError):
+    """A policy emitted an action that violates the orchestration schema."""

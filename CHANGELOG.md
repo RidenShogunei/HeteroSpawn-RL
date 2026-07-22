@@ -8,3 +8,6 @@ All notable project changes are recorded here. Architecture-changing decisions a
 
 - Architecture Baseline v0.2.
 - Initial Python project, governance, CI, and CPU-only policy contracts.
+- Pinned encrypted xbench-DeepSearch-2510 loader and non-comparable exact-only scorer.
+- MiniMax evaluation policy and Tavily search adapters with bounded retries.
+- API-first 0/1/4-Sub orchestration with structured repair and failure isolation.
