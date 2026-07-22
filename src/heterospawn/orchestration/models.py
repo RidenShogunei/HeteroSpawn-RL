@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 from heterospawn.domain.ids import AgentInstanceId, EpisodeId, PolicyId, TaskId
 from heterospawn.errors import InvalidActionError
-from heterospawn.policies.base import ExternalModelRevision
+from heterospawn.policies.base import ExternalModelRevision, TokenUsage
 
 
 class AnswerAction(BaseModel):
@@ -44,6 +44,7 @@ class MainAttempt(BaseModel):
     attempt_index: int = Field(ge=0)
     content: str
     raw_response_digest: str
+    usage: TokenUsage
     valid: bool
     error_code: str | None = None
 
@@ -55,8 +56,10 @@ class SubResult(BaseModel):
     subtask: str
     status: Literal["success", "failed"]
     content: str
+    search_provider_revision: str | None = None
     search_provider_request_id: str | None = None
     policy_provider_request_id: str | None = None
+    policy_usage: TokenUsage | None = None
     error_code: str | None = None
 
 

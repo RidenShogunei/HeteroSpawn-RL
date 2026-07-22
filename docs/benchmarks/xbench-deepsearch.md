@@ -20,6 +20,8 @@ heterospawn inspect-xbench data/private/xbench/DeepSearch-2510.csv
 
 An official-comparable report requires the pinned upstream evaluator, its judge protocol, repeat count, and aggregation behavior. A MiniMax-based judge or exact-only run must never be presented as an official xbench score.
 
+The pinned upstream default is five repeats per task. It records average score, best-of-N, and a randomly tie-broken majority vote after sending non-exact answers to the Gemini 2.0 judge. `development-repeat-exact-only` preserves the repeat denominators and deterministic direct-match shortcut, but intentionally omits the judge and majority vote; it is therefore always non-comparable.
+
 ## API smoke run
 
 The runnable first architecture uses MiniMax for Main/Sub policy calls and a provider-neutral search service. Credentials are environment-only. Network use and external credit spending require an explicit flag:
@@ -50,6 +52,21 @@ heterospawn run-api-conformance --allow-network --search-backend minimax-mcp
 
 This backend requires `uvx` on `PATH` and a MiniMax Token Plan credential in `MINIMAX_API_KEY`. The subprocess package is pinned by the adapter; no Tavily credential is used.
 
+## Reproducible API pilot
+
+The pilot runner executes every task/repeat as a fresh sequential episode and emits only revision-complete manifests, per-episode operational summaries, and aggregate development scores:
+
+```bash
+heterospawn run-api-pilot data/private/xbench/DeepSearch-2510.csv \
+  --allow-network \
+  --search-backend minimax-mcp \
+  --task-id 101 --task-id 102 --task-id 103 \
+  --repeats 1 \
+  --run-id xbench-minimax-mcp-pilot-20260722
+```
+
+The default task set is `101, 102, 103`; explicit IDs are preferred for recorded runs. The manifest pins dataset/evaluator/model/search revisions, resolved sampling parameters, repeat count, execution mode, repair count, concurrency, and a maximum of four Sub instances per episode. Safe progress lines are written after each episode. Prompts, answers, evidence, search result bodies, provider error bodies, and reasoning are never included.
+
 The command emits no ground truth and labels its exact-only score non-comparable. API traces are evaluation-only because provider responses do not supply the exact rollout token IDs, old log-probabilities, or `RolloutRevision` required for RL training.
 
-References: [MiniMax OpenAI-compatible API](https://platform.minimaxi.com/docs/api-reference/api-overview), [MiniMax Token Plan MCP](https://platform.minimaxi.com/docs/guides/token-plan-mcp-guide), [Tavily Search API](https://docs.tavily.com/documentation/api-reference/endpoint/search).
+References: [pinned xbench evaluator](https://github.com/xbench-ai/xbench-evals/tree/17c562192cc7e62215bfb98b65e9f8806fb95504), [MiniMax OpenAI-compatible API](https://platform.minimaxi.com/docs/api-reference/api-overview), [MiniMax Token Plan MCP](https://platform.minimaxi.com/docs/guides/token-plan-mcp-guide), [Tavily Search API](https://docs.tavily.com/documentation/api-reference/endpoint/search).

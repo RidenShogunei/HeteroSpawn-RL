@@ -19,7 +19,12 @@ from heterospawn.orchestration.models import (
     SubResult,
     parse_main_action,
 )
-from heterospawn.policies.base import EvaluationGenerationRequest, EvaluationPolicyService, Message
+from heterospawn.policies.base import (
+    EvaluationGenerationRequest,
+    EvaluationPolicyService,
+    JsonScalar,
+    Message,
+)
 from heterospawn.search.base import SearchRequest, SearchService
 
 _MAIN_SYSTEM_PROMPT = """You are the Main research policy. Return exactly one JSON object.
@@ -37,13 +42,19 @@ class ApiEpisodeOrchestrator:
         search: SearchService,
         *,
         max_concurrency: int = 4,
+        max_spawn_per_episode: int = 4,
         repair_attempts: int = 1,
+        sampling_params: tuple[tuple[str, JsonScalar], ...] = (),
     ) -> None:
         if repair_attempts < 0:
             raise ValueError("repair_attempts cannot be negative")
+        if max_spawn_per_episode < 1:
+            raise ValueError("max_spawn_per_episode must be positive")
         self._policy = policy
         self._search = search
         self._repair_attempts = repair_attempts
+        self._max_spawn_per_episode = max_spawn_per_episode
+        self._sampling_params = sampling_params
         self._ledger = ConcurrencyBudgetLedger(max_concurrency)
         self._semaphore = asyncio.Semaphore(max_concurrency)
 
@@ -55,7 +66,7 @@ class ApiEpisodeOrchestrator:
             episode_id,
             phase="initial",
             messages=(
-                Message(role="system", content=_MAIN_SYSTEM_PROMPT),
+                Message(role="system", content=self._main_system_prompt),
                 Message(role="user", content=task.prompt),
             ),
             events=events,
@@ -104,7 +115,7 @@ class ApiEpisodeOrchestrator:
             episode_id,
             phase="final",
             messages=(
-                Message(role="system", content=_MAIN_SYSTEM_PROMPT),
+                Message(role="system", content=self._main_system_prompt),
                 Message(role="user", content=task.prompt),
                 Message(
                     role="user",
@@ -154,11 +165,17 @@ class ApiEpisodeOrchestrator:
                     agent_role="main",
                     agent_instance_id=AgentInstanceId("main-0"),
                     messages=current_messages,
+                    sampling_params=self._sampling_params,
                 )
             )
             error_code: str | None = None
             try:
                 action = parse_main_action(result.content)
+                if (
+                    isinstance(action, SpawnAction)
+                    and len(action.subtasks) > self._max_spawn_per_episode
+                ):
+                    raise InvalidActionError("Main spawn exceeds the configured episode limit")
                 if require_answer and isinstance(action, SpawnAction):
                     raise InvalidActionError("final Main output must be ANSWER")
                 valid = True
@@ -173,6 +190,7 @@ class ApiEpisodeOrchestrator:
                     attempt_index=attempt_index,
                     content=result.content,
                     raw_response_digest=result.raw_response_digest,
+                    usage=result.usage,
                     valid=valid,
                     error_code=error_code,
                 )
@@ -245,6 +263,7 @@ class ApiEpisodeOrchestrator:
                                 content=json.dumps(sources, ensure_ascii=False, sort_keys=True),
                             ),
                         ),
+                        sampling_params=self._sampling_params,
                     )
                 )
                 return SubResult(
@@ -252,8 +271,10 @@ class ApiEpisodeOrchestrator:
                     subtask=subtask,
                     status="success",
                     content=policy_response.content,
+                    search_provider_revision=search_response.provider_revision,
                     search_provider_request_id=search_response.provider_request_id,
                     policy_provider_request_id=policy_response.provider_request_id,
+                    policy_usage=policy_response.usage,
                 )
             except Exception as exc:
                 return SubResult(
@@ -265,6 +286,13 @@ class ApiEpisodeOrchestrator:
                 )
             finally:
                 await self._ledger.release(reservation_id)
+
+    @property
+    def _main_system_prompt(self) -> str:
+        return (
+            f"{_MAIN_SYSTEM_PROMPT}\n"
+            f"At most {self._max_spawn_per_episode} subtasks may be spawned in this episode."
+        )
 
     def _trace(
         self,

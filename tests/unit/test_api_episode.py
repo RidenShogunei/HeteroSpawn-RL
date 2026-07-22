@@ -116,6 +116,24 @@ async def test_invalid_main_output_is_retained_before_repair() -> None:
 
 
 @pytest.mark.asyncio
+async def test_spawn_above_episode_limit_is_retained_and_repaired() -> None:
+    from heterospawn.orchestration.api_episode import ApiEpisodeOrchestrator
+
+    trace = await ApiEpisodeOrchestrator(
+        ScenarioPolicy(5),
+        MockSearchService(),
+        max_spawn_per_episode=4,
+    ).run(
+        BenchmarkTask(task_id=TaskId("task-1"), prompt="question"),
+        EpisodeId("episode-over-limit"),
+    )
+
+    assert trace.spawn_count == 0
+    assert [attempt.valid for attempt in trace.main_attempts] == [False, True]
+    assert [event.status for event in trace.events] == ["invalid", "valid"]
+
+
+@pytest.mark.asyncio
 async def test_one_sub_failure_does_not_cancel_siblings() -> None:
     from heterospawn.orchestration.api_episode import ApiEpisodeOrchestrator
 
