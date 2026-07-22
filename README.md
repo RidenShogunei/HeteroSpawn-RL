@@ -1,0 +1,28 @@
+# HeteroSpawn-RL
+
+HeteroSpawn-RL studies dynamic heterogeneous agent spawning with fresh-rollout alternating policy optimization for deep-research tasks.
+
+The project is deliberately staged:
+
+1. CPU-only domain contracts and mock orchestration.
+2. API-first benchmark validation with xbench-DeepSearch and MiniMax.
+3. Exact-token local-model rollout and independent Main/Sub training backends.
+
+The authoritative architecture is [HeteroSpawn_DeepResearch_RL_Project_Design.md](HeteroSpawn_DeepResearch_RL_Project_Design.md). Significant decisions are recorded under `docs/adr/`; implementation work is linked to GitHub issues, milestones, commits, and pull requests.
+
+## Development setup
+
+```bash
+python -m venv .venv
+python -m pip install --upgrade pip
+python -m pip install -e ".[dev]"
+python -m pytest
+python -m ruff check .
+python -m mypy src
+```
+
+API keys are read only from environment variables. Copy `.env.example` to `.env` for local use, and never commit the resulting file. API-backed episodes are evaluation artifacts and are not eligible for RL training unless the policy backend supplies exact rollout token IDs, old log-probabilities, and an auditable rollout revision.
+
+## Current status
+
+Architecture Baseline v0.2 is complete. Milestone 0 establishes the repository and CPU contract tests; the next vertical slice validates xbench-DeepSearch through MiniMax and an independently observable search backend.
