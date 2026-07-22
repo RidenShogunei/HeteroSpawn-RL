@@ -17,6 +17,14 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+local = [
+  "accelerate>=1.2,<2",
+  "numpy>=1.26,<2",
+  "peft>=0.14,<1",
+  "safetensors>=0.4,<1",
+  "torch>=2.4,<3",
+  "transformers>=4.47,<5",
+]
 dev = [
   "mypy>=1.10,<2",
   "pytest>=8.2,<9",
@@ -35,6 +43,8 @@ addopts = "-ra --strict-markers"
 testpaths = ["tests"]
 markers = [
   "live: requires explicitly configured external API credentials",
+  "local_backend: requires optional local-model dependencies",
+  "gpu: requires an explicitly selected CUDA device and local model download",
 ]
 
 [tool.ruff]

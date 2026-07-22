@@ -191,6 +191,37 @@ def test_zero_reward_variance_yields_zero_advantage_and_degenerate_metric() -> N
     assert set(group.as_mapping().values()) == {0.0}
 
 
+def test_training_batch_rejects_mixed_rollout_revisions() -> None:
+    policy_id = PolicyId("main")
+    backend = MockTrainingBackend((policy_id,))
+    first = _step(
+        policy_id=policy_id,
+        backend=backend,
+        episode="ep-1",
+        agent="a",
+        step="s-0",
+    )
+    mixed = first.model_copy(
+        update={
+            "step_id": StepId("s-1"),
+            "event_index": 1,
+            "rollout_revision": first.rollout_revision.model_copy(
+                update={"replica_set_revision": 1}
+            ),
+        }
+    )
+
+    with pytest.raises(ValidationError, match="cannot mix rollout revisions"):
+        TrainingBatchBuilder().build(
+            batch_id="mixed",
+            phase="main_update",
+            target_policy_id=policy_id,
+            expected_base_version=backend.weight_version(policy_id),
+            steps=(first, mixed),
+            episode_advantages={EpisodeId("ep-1"): 1.0},
+        )
+
+
 @pytest.mark.asyncio
 async def test_mock_update_sync_is_idempotent_and_isolates_partner() -> None:
     main = PolicyId("main")

@@ -174,11 +174,15 @@ class PolicyTrainingBatch(BaseModel):
 
     @model_validator(mode="after")
     def batch_must_match_digest_and_target(self) -> PolicyTrainingBatch:
+        rollout_revisions: set[RolloutRevision] = set()
         for sample in self.samples:
             if sample.policy_id != self.target_policy_id:
                 raise ValueError("all samples must target the physical policy")
             if sample.rollout_revision.weight_version != self.expected_base_version:
                 raise ValueError("sample rollout weights must match expected base version")
+            rollout_revisions.add(sample.rollout_revision)
+        if len(rollout_revisions) > 1:
+            raise ValueError("a training batch cannot mix rollout revisions")
         expected = canonical_digest(
             training_batch_digest_payload(
                 batch_id=self.batch_id,

@@ -114,6 +114,31 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="required acknowledgement that this command spends external API credits",
     )
+    local_parser = subparsers.add_parser(
+        "local-contract-smoke",
+        help="run the opt-in single-GPU exact-token LoRA contract",
+    )
+    local_parser.add_argument(
+        "--allow-model-download",
+        action="store_true",
+        help="required acknowledgement that the pinned model may be downloaded",
+    )
+    local_parser.add_argument("--device", default="cuda:0")
+    local_parser.add_argument(
+        "--model-path",
+        type=Path,
+        help="optional local directory whose pinned model weight digest is verified",
+    )
+    local_parser.add_argument(
+        "--artifact-dir",
+        type=Path,
+        default=Path("artifacts/local-contract/checkpoints"),
+    )
+    local_parser.add_argument(
+        "--report",
+        type=Path,
+        default=Path("artifacts/local-contract/report.json"),
+    )
     return parser
 
 
@@ -161,6 +186,24 @@ def main(argv: Sequence[str] | None = None) -> int:
                 judge_backend=args.judge_backend,
             )
         )
+    if args.command == "local-contract-smoke":
+        if args.model_path is None and not args.allow_model_download:
+            raise SystemExit("--allow-model-download is required for the local model smoke")
+        from heterospawn.backends.local_hf.config import LocalLoraConfig
+        from heterospawn.backends.local_hf.smoke import run_local_contract_smoke
+
+        report = asyncio.run(
+            run_local_contract_smoke(
+                config=LocalLoraConfig(
+                    device=args.device,
+                    model_path=args.model_path,
+                    artifact_dir=args.artifact_dir,
+                ),
+                report_path=args.report,
+            )
+        )
+        print(json.dumps(report, ensure_ascii=False, sort_keys=True))
+        return 0
     return 0
 
 
