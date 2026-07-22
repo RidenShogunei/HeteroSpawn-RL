@@ -6,6 +6,7 @@ import pytest
 
 from heterospawn.benchmarks.xbench import BenchmarkTask
 from heterospawn.domain.ids import EpisodeId, PolicyId, TaskId
+from heterospawn.orchestration.api_episode import ApiEpisodeOrchestrator
 from heterospawn.policies.base import (
     EvaluationGenerationRequest,
     EvaluationGenerationResult,
@@ -77,8 +78,6 @@ class PartiallyFailingSearch(MockSearchService):
 @pytest.mark.asyncio
 @pytest.mark.parametrize("subtask_count", [0, 1, 4])
 async def test_dynamic_sub_counts_have_stable_event_order(subtask_count: int) -> None:
-    from heterospawn.orchestration.api_episode import ApiEpisodeOrchestrator
-
     trace = await ApiEpisodeOrchestrator(
         ScenarioPolicy(subtask_count),
         MockSearchService(),
@@ -99,8 +98,6 @@ async def test_dynamic_sub_counts_have_stable_event_order(subtask_count: int) ->
 
 @pytest.mark.asyncio
 async def test_invalid_main_output_is_retained_before_repair() -> None:
-    from heterospawn.orchestration.api_episode import ApiEpisodeOrchestrator
-
     trace = await ApiEpisodeOrchestrator(
         ScenarioPolicy(0, invalid_first=True),
         MockSearchService(),
@@ -117,8 +114,6 @@ async def test_invalid_main_output_is_retained_before_repair() -> None:
 
 @pytest.mark.asyncio
 async def test_spawn_above_episode_limit_is_retained_and_repaired() -> None:
-    from heterospawn.orchestration.api_episode import ApiEpisodeOrchestrator
-
     trace = await ApiEpisodeOrchestrator(
         ScenarioPolicy(5),
         MockSearchService(),
@@ -135,8 +130,6 @@ async def test_spawn_above_episode_limit_is_retained_and_repaired() -> None:
 
 @pytest.mark.asyncio
 async def test_one_sub_failure_does_not_cancel_siblings() -> None:
-    from heterospawn.orchestration.api_episode import ApiEpisodeOrchestrator
-
     trace = await ApiEpisodeOrchestrator(
         ScenarioPolicy(4),
         PartiallyFailingSearch(),

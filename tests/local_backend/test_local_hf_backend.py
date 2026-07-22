@@ -20,10 +20,7 @@ if os.environ.get("HETEROSPAWN_RUN_LOCAL_BACKEND_TESTS") != "1":
         allow_module_level=True,
     )
 
-torch = importlib.import_module("torch")
 transformers = importlib.import_module("transformers")
-importlib.import_module("peft")
-importlib.import_module("safetensors")
 
 pytestmark = pytest.mark.local_backend
 
