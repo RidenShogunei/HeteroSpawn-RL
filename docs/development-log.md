@@ -17,3 +17,6 @@ This file records milestone-level events. Fine-grained work remains in GitHub is
 - Fixed live-only findings for inline thinking normalization, scoped single-task scoring, sanitized schema diagnostics, and bounded retry of HTTP-200 schema failures.
 - Validated MiniMax Token Plan MCP `web_search` with the existing credential and completed a real M2.7 Main → MCP search → Sub → Main episode.
 - Pinned `minimax-coding-plan-mcp==0.0.4` and restricted its subprocess environment to avoid inheriting unrelated credentials.
+- Added a fixed-task, repeat-aware xbench API pilot with revision-complete manifests, fresh episode IDs, bounded spawn, token/latency accounting, failure isolation, and credential-safe progress/report output.
+- Completed the first three-task MiniMax-M2.7 + MiniMax MCP pilot: 3/3 episodes and 6/6 spawned Subs completed; the exact-only result remained explicitly non-official.
+- Removed the one-off `probe_minimax_mcp.py` after its live capability coverage was replaced by the formal pilot, MCP adapter contract tests, and retained synthetic conformance command. Shared encrypted xbench fixture construction moved to `tests/conftest.py`; no distinct contract tests were deleted.

@@ -5,18 +5,32 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import sys
 from collections.abc import Sequence
 from pathlib import Path
 
 from heterospawn import __version__
 from heterospawn.benchmarks.xbench import BenchmarkTask, load_xbench
 from heterospawn.domain.ids import EpisodeId, PolicyId, TaskId
+from heterospawn.evaluation.api_pilot import (
+    ApiPilotConfig,
+    ApiPilotRunner,
+    PilotEpisodeSummary,
+)
 from heterospawn.orchestration.api_episode import ApiEpisodeOrchestrator
 from heterospawn.policies.minimax import MiniMaxConfig, MiniMaxEvaluationPolicy
 from heterospawn.search.base import SearchService
-from heterospawn.search.minimax_mcp import MiniMaxMcpConfig, MiniMaxMcpSearchService
-from heterospawn.search.mock import MockSearchService
-from heterospawn.search.tavily import TavilyConfig, TavilySearchService
+from heterospawn.search.minimax_mcp import (
+    MINIMAX_MCP_REVISION,
+    MiniMaxMcpConfig,
+    MiniMaxMcpSearchService,
+)
+from heterospawn.search.mock import MOCK_SEARCH_REVISION, MockSearchService
+from heterospawn.search.tavily import (
+    TAVILY_SEARCH_REVISION,
+    TavilyConfig,
+    TavilySearchService,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -66,6 +80,29 @@ def build_parser() -> argparse.ArgumentParser:
         default="mock",
         help="search backend used by the required Sub",
     )
+    pilot_parser = subparsers.add_parser(
+        "run-api-pilot",
+        help="run a fixed credential-safe xbench task set through fresh API episodes",
+    )
+    pilot_parser.add_argument("dataset", type=Path)
+    pilot_parser.add_argument(
+        "--task-id",
+        action="append",
+        dest="task_ids",
+        help="task ID to include; repeat for multiple tasks (default: 101, 102, 103)",
+    )
+    pilot_parser.add_argument("--repeats", type=int, default=1)
+    pilot_parser.add_argument("--run-id", default="xbench-api-pilot-v1")
+    pilot_parser.add_argument(
+        "--search-backend",
+        choices=("mock", "tavily", "minimax-mcp"),
+        default="minimax-mcp",
+    )
+    pilot_parser.add_argument(
+        "--allow-network",
+        action="store_true",
+        help="required acknowledgement that this command spends external API credits",
+    )
     return parser
 
 
@@ -99,6 +136,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         if not args.allow_network:
             raise SystemExit("--allow-network is required for external API calls")
         return asyncio.run(_run_api_conformance(args.search_backend))
+    if args.command == "run-api-pilot":
+        if not args.allow_network:
+            raise SystemExit("--allow-network is required for external API calls")
+        task_ids = tuple(TaskId(item) for item in (args.task_ids or ("101", "102", "103")))
+        return asyncio.run(
+            _run_api_pilot(
+                args.dataset,
+                task_ids=task_ids,
+                repeats=args.repeats,
+                run_id=args.run_id,
+                search_backend=args.search_backend,
+            )
+        )
     return 0
 
 
@@ -180,12 +230,53 @@ async def _run_api_conformance(search_backend: str) -> int:
     return 0
 
 
+async def _run_api_pilot(
+    dataset_path: Path,
+    *,
+    task_ids: tuple[TaskId, ...],
+    repeats: int,
+    run_id: str,
+    search_backend: str,
+) -> int:
+    dataset = load_xbench(dataset_path)
+    policy = MiniMaxEvaluationPolicy(PolicyId("shared-minimax"), MiniMaxConfig.from_environment())
+    report = await ApiPilotRunner(
+        dataset,
+        policy,
+        _build_search(search_backend),
+        ApiPilotConfig(
+            run_id=run_id,
+            task_ids=task_ids,
+            repeats_per_task=repeats,
+            search_backend=search_backend,
+            search_revision=_search_revision(search_backend),
+        ),
+        progress_callback=_write_pilot_progress,
+    ).run()
+    print(report.model_dump_json())
+    if report.failed_episodes:
+        raise SystemExit("one or more pilot episodes failed")
+    return 0
+
+
 def _build_search(search_backend: str) -> SearchService:
     if search_backend == "tavily":
         return TavilySearchService(TavilyConfig.from_environment())
     if search_backend == "minimax-mcp":
         return MiniMaxMcpSearchService(MiniMaxMcpConfig.from_environment())
     return MockSearchService()
+
+
+def _search_revision(search_backend: str) -> str:
+    if search_backend == "tavily":
+        return TAVILY_SEARCH_REVISION
+    if search_backend == "minimax-mcp":
+        return MINIMAX_MCP_REVISION
+    return MOCK_SEARCH_REVISION
+
+
+def _write_pilot_progress(summary: PilotEpisodeSummary) -> None:
+    print(f"pilot-progress {summary.model_dump_json()}", file=sys.stderr)
 
 
 if __name__ == "__main__":

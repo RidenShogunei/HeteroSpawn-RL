@@ -27,4 +27,4 @@ The first runnable slice is documented in [docs/benchmarks/xbench-deepsearch.md]
 
 ## Current status
 
-Architecture Baseline v0.2 and Milestone 0 are complete. The stacked Milestone 1 draft validates xbench-DeepSearch through MiniMax and an independently observable search backend before any local-model rollout work.
+Architecture Baseline v0.2 and Milestone 0 are complete. The current Milestone 1 validation runs fixed xbench-DeepSearch task sets through fresh MiniMax episodes and an independently observable search backend before any local-model rollout work.

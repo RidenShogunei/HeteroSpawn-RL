@@ -14,6 +14,7 @@ from heterospawn.errors import ConfigurationError, SearchRequestError
 from heterospawn.search.base import SearchItem, SearchRequest, SearchResponse
 
 DEFAULT_TAVILY_BASE_URL = "https://api.tavily.com"
+TAVILY_SEARCH_REVISION = "search-v1-basic"
 _RETRYABLE_STATUS_CODES = frozenset({408, 409, 429, 500, 502, 503, 504})
 Sleeper = Callable[[float], Awaitable[None]]
 
@@ -98,7 +99,7 @@ class TavilySearchService:
         return SearchResponse(
             request_id=request.request_id,
             provider="tavily",
-            provider_revision="search-v1-basic",
+            provider_revision=TAVILY_SEARCH_REVISION,
             provider_request_id=parsed.request_id,
             query=parsed.query,
             results=tuple(

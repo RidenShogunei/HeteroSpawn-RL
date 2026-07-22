@@ -6,6 +6,8 @@ import hashlib
 
 from heterospawn.search.base import SearchItem, SearchRequest, SearchResponse
 
+MOCK_SEARCH_REVISION = "deterministic-v1"
+
 
 class MockSearchService:
     def __init__(self, content_by_query: dict[str, str] | None = None) -> None:
@@ -17,7 +19,7 @@ class MockSearchService:
         return SearchResponse(
             request_id=request.request_id,
             provider="mock-search",
-            provider_revision="deterministic-v1",
+            provider_revision=MOCK_SEARCH_REVISION,
             provider_request_id=f"mock:{request.request_id}",
             query=request.query,
             results=(
