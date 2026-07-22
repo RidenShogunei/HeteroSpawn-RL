@@ -6,6 +6,7 @@ from heterospawn.evaluation.api_pilot import (
     ApiPilotRunner,
     PilotEpisodeSummary,
     PilotManifest,
+    PilotTaskSummary,
 )
 from heterospawn.evaluation.judges import (
     JudgeRequest,
@@ -26,4 +27,5 @@ __all__ = [
     "MiniMaxDevelopmentJudge",
     "PilotEpisodeSummary",
     "PilotManifest",
+    "PilotTaskSummary",
 ]

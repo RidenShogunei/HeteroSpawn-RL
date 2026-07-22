@@ -15,3 +15,4 @@ All notable project changes are recorded here. Architecture-changing decisions a
 - MiniMax Token Plan MCP search adapter, pinned stdio transport, and live Main/Sub search validation.
 - Reproducible xbench API pilot manifests, repeat-aware exact-only metrics, bounded spawn, safe progress, and aggregate token/latency reporting.
 - Provider-neutral xbench Judge contracts, MiniMax development judging, versioned verdict-format repair, and safe failed-episode/Judge cost accounting.
+- Deterministic per-task pilot summaries, failure counts, Sub/Main totals, and nearest-rank latency percentiles after a recorded 15-episode MiniMax multi-task validation.

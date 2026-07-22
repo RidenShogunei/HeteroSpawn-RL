@@ -104,6 +104,28 @@ class PilotEpisodeSummary(BaseModel):
     trainable: Literal[False] = False
 
 
+class PilotTaskSummary(BaseModel):
+    """Safe task-level operational aggregate for cross-task comparisons."""
+
+    model_config = ConfigDict(frozen=True, strict=True)
+
+    task_id: TaskId
+    attempted_episodes: int = Field(ge=0)
+    completed_episodes: int = Field(ge=0)
+    failed_episodes: int = Field(ge=0)
+    failure_counts: tuple[tuple[str, int], ...]
+    zero_spawn_episodes: int = Field(ge=0)
+    total_spawn_count: int = Field(ge=0)
+    successful_subs: int = Field(ge=0)
+    failed_subs: int = Field(ge=0)
+    invalid_main_attempts: int = Field(ge=0)
+    total_tokens: int = Field(ge=0)
+    total_latency_ms: int = Field(ge=0)
+    latency_p50_ms: int = Field(ge=0)
+    latency_p95_ms: int = Field(ge=0)
+    latency_max_ms: int = Field(ge=0)
+
+
 class ApiPilotReport(BaseModel):
     """One complete safe report for audit and comparison."""
 
@@ -112,15 +134,23 @@ class ApiPilotReport(BaseModel):
     manifest: PilotManifest
     manifest_digest: str
     episodes: tuple[PilotEpisodeSummary, ...]
+    task_summaries: tuple[PilotTaskSummary, ...]
     score: RepeatExactScoreReport | JudgedRepeatScoreReport
     completed_episodes: int = Field(ge=0)
     failed_episodes: int = Field(ge=0)
+    failure_counts: tuple[tuple[str, int], ...]
     zero_spawn_episodes: int = Field(ge=0)
     total_spawn_count: int = Field(ge=0)
+    successful_subs: int = Field(ge=0)
+    failed_subs: int = Field(ge=0)
+    invalid_main_attempts: int = Field(ge=0)
     total_prompt_tokens: int = Field(ge=0)
     total_completion_tokens: int = Field(ge=0)
     total_tokens: int = Field(ge=0)
     total_latency_ms: int = Field(ge=0)
+    latency_p50_ms: int = Field(ge=0)
+    latency_p95_ms: int = Field(ge=0)
+    latency_max_ms: int = Field(ge=0)
 
 
 class ApiPilotRunner:
@@ -222,15 +252,25 @@ class ApiPilotRunner:
             manifest=manifest,
             manifest_digest=manifest_digest,
             episodes=episodes,
+            task_summaries=tuple(
+                _task_summary(task_id, episodes) for task_id in self._config.task_ids
+            ),
             score=score,
             completed_episodes=len(completed),
             failed_episodes=len(episodes) - len(completed),
+            failure_counts=_failure_counts(episodes),
             zero_spawn_episodes=sum(item.spawn_count == 0 for item in completed),
             total_spawn_count=sum(item.spawn_count for item in episodes),
+            successful_subs=sum(item.successful_subs for item in episodes),
+            failed_subs=sum(item.failed_subs for item in episodes),
+            invalid_main_attempts=sum(item.invalid_main_attempts for item in episodes),
             total_prompt_tokens=sum(item.prompt_tokens for item in episodes),
             total_completion_tokens=sum(item.completion_tokens for item in episodes),
             total_tokens=sum(item.total_tokens for item in episodes),
             total_latency_ms=sum(item.latency_ms for item in episodes),
+            latency_p50_ms=_nearest_rank_latency(episodes, 50),
+            latency_p95_ms=_nearest_rank_latency(episodes, 95),
+            latency_max_ms=max(item.latency_ms for item in episodes),
         )
 
     def _build_manifest(self) -> PilotManifest:
@@ -326,6 +366,52 @@ def _failed_summary(
 
 def _elapsed_ms(start: float, end: float) -> int:
     return max(0, round((end - start) * 1000))
+
+
+def _task_summary(
+    task_id: TaskId,
+    episodes: tuple[PilotEpisodeSummary, ...],
+) -> PilotTaskSummary:
+    selected = tuple(item for item in episodes if item.task_id == task_id)
+    completed = tuple(item for item in selected if item.status == "completed")
+    return PilotTaskSummary(
+        task_id=task_id,
+        attempted_episodes=len(selected),
+        completed_episodes=len(completed),
+        failed_episodes=len(selected) - len(completed),
+        failure_counts=_failure_counts(selected),
+        zero_spawn_episodes=sum(item.spawn_count == 0 for item in completed),
+        total_spawn_count=sum(item.spawn_count for item in selected),
+        successful_subs=sum(item.successful_subs for item in selected),
+        failed_subs=sum(item.failed_subs for item in selected),
+        invalid_main_attempts=sum(item.invalid_main_attempts for item in selected),
+        total_tokens=sum(item.total_tokens for item in selected),
+        total_latency_ms=sum(item.latency_ms for item in selected),
+        latency_p50_ms=_nearest_rank_latency(selected, 50),
+        latency_p95_ms=_nearest_rank_latency(selected, 95),
+        latency_max_ms=max(item.latency_ms for item in selected),
+    )
+
+
+def _failure_counts(
+    episodes: tuple[PilotEpisodeSummary, ...],
+) -> tuple[tuple[str, int], ...]:
+    counts: dict[str, int] = {}
+    for item in episodes:
+        if item.error_code is not None:
+            counts[item.error_code] = counts.get(item.error_code, 0) + 1
+    return tuple(sorted(counts.items()))
+
+
+def _nearest_rank_latency(
+    episodes: tuple[PilotEpisodeSummary, ...],
+    percentile: int,
+) -> int:
+    if not episodes:
+        return 0
+    values = sorted(item.latency_ms for item in episodes)
+    rank = max(1, (percentile * len(values) + 99) // 100)
+    return values[rank - 1]
 
 
 def _digest_model(model: BaseModel) -> str:
