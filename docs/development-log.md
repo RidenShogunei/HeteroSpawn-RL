@@ -27,3 +27,4 @@ This file records milestone-level events. Fine-grained work remains in GitHub is
 - Implemented the Milestone 2 exact-token training contracts, topology registry, mock backend, and fresh-rollout coordinator without changing the non-trainable status of API traces.
 - Added executable CPU contracts for stale-version rejection, immutable update/sync/checkpoint transitions, shared and frozen policies, 0/1/4-Sub advantage groups, episode-balanced weights, and empty Sub batches.
 - Added the optional LocalHF LoRA reference backend and validated the pinned Qwen2.5-0.5B model on one RTX 4060 Laptop GPU: independent Main/Sub optimizer steps, explicit sync barriers, stale-revision rejection, four shared Sub calls, and checkpoint restore all passed.
+- Audited the remote RTX 2080 Ti host without mutation and added a credential-safe preflight plus a remote-agent runbook for isolated verl/RLinf capability spikes.
