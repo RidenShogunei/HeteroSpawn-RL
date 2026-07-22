@@ -26,3 +26,18 @@ jobs:
       - run: python -m ruff format --check .
       - run: python -m mypy src
       - run: python -m pytest
+
+  local-backend-contract:
+    runs-on: ubuntu-latest
+    env:
+      HETEROSPAWN_RUN_LOCAL_BACKEND_TESTS: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: python -m pip install --upgrade pip
+      - run: python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - run: python -m pip install -e ".[dev,local]"
+      - run: python -m pytest -m local_backend
