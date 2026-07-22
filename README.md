@@ -23,6 +23,8 @@ python -m mypy src
 
 API keys are read only from environment variables. Copy `.env.example` to `.env` for local use, and never commit the resulting file. API-backed episodes are evaluation artifacts and are not eligible for RL training unless the policy backend supplies exact rollout token IDs, old log-probabilities, and an auditable rollout revision.
 
+The first runnable slice is documented in [docs/benchmarks/xbench-deepsearch.md](docs/benchmarks/xbench-deepsearch.md). It keeps xbench ground truth behind the evaluator, uses MiniMax only through the current OpenAI-compatible endpoint, and keeps Tavily search behind a separate interface.
+
 ## Current status
 
-Architecture Baseline v0.2 is complete. Milestone 0 establishes the repository and CPU contract tests; the next vertical slice validates xbench-DeepSearch through MiniMax and an independently observable search backend.
+Architecture Baseline v0.2 and Milestone 0 are complete. The stacked Milestone 1 draft validates xbench-DeepSearch through MiniMax and an independently observable search backend before any local-model rollout work.
