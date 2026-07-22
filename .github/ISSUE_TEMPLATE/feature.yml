@@ -1,0 +1,25 @@
+name: Milestone task
+description: Track an implementation or research milestone with explicit acceptance criteria.
+title: "[Milestone] "
+labels: ["milestone"]
+body:
+  - type: textarea
+    id: objective
+    attributes:
+      label: Objective
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      placeholder: "- [ ] Observable condition"
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Required evidence
+      description: Tests, traces, metrics, ADRs, or benchmark revisions required for completion.
+    validations:
+      required: true
