@@ -17,8 +17,13 @@ from heterospawn.evaluation.api_pilot import (
     ApiPilotRunner,
     PilotEpisodeSummary,
 )
+from heterospawn.evaluation.judges import MiniMaxDevelopmentJudge
 from heterospawn.orchestration.api_episode import ApiEpisodeOrchestrator
-from heterospawn.policies.minimax import MiniMaxConfig, MiniMaxEvaluationPolicy
+from heterospawn.policies.minimax import (
+    MiniMaxChatClient,
+    MiniMaxConfig,
+    MiniMaxEvaluationPolicy,
+)
 from heterospawn.search.base import SearchService
 from heterospawn.search.minimax_mcp import (
     MINIMAX_MCP_REVISION,
@@ -99,6 +104,12 @@ def build_parser() -> argparse.ArgumentParser:
         default="minimax-mcp",
     )
     pilot_parser.add_argument(
+        "--judge-backend",
+        choices=("none", "minimax-development"),
+        default="none",
+        help="optional non-official judge for answers that miss direct exact match",
+    )
+    pilot_parser.add_argument(
         "--allow-network",
         action="store_true",
         help="required acknowledgement that this command spends external API credits",
@@ -147,6 +158,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 repeats=args.repeats,
                 run_id=args.run_id,
                 search_backend=args.search_backend,
+                judge_backend=args.judge_backend,
             )
         )
     return 0
@@ -237,9 +249,16 @@ async def _run_api_pilot(
     repeats: int,
     run_id: str,
     search_backend: str,
+    judge_backend: str,
 ) -> int:
     dataset = load_xbench(dataset_path)
-    policy = MiniMaxEvaluationPolicy(PolicyId("shared-minimax"), MiniMaxConfig.from_environment())
+    minimax_config = MiniMaxConfig.from_environment()
+    policy = MiniMaxEvaluationPolicy(PolicyId("shared-minimax"), minimax_config)
+    judge = (
+        MiniMaxDevelopmentJudge(MiniMaxChatClient(minimax_config))
+        if judge_backend == "minimax-development"
+        else None
+    )
     report = await ApiPilotRunner(
         dataset,
         policy,
@@ -250,7 +269,9 @@ async def _run_api_pilot(
             repeats_per_task=repeats,
             search_backend=search_backend,
             search_revision=_search_revision(search_backend),
+            judge_mode="minimax-development" if judge is not None else "none",
         ),
+        judge=judge,
         progress_callback=_write_pilot_progress,
     ).run()
     print(report.model_dump_json())

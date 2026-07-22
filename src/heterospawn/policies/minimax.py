@@ -17,6 +17,8 @@ from heterospawn.policies.base import (
     EvaluationGenerationRequest,
     EvaluationGenerationResult,
     ExternalModelRevision,
+    JsonScalar,
+    Message,
     PolicyCapabilities,
     TokenUsage,
 )
@@ -82,18 +84,38 @@ class _ChatCompletionResponse(BaseModel):
     usage: _ResponseUsage
 
 
-class MiniMaxEvaluationPolicy:
-    """Calls MiniMax for text evaluation without claiming trainable provenance."""
+class MiniMaxChatRequest(BaseModel):
+    """Role-neutral text request shared by policy and evaluator adapters."""
+
+    model_config = ConfigDict(frozen=True, strict=True)
+
+    messages: tuple[Message, ...] = Field(min_length=1)
+    sampling_params: tuple[tuple[str, JsonScalar], ...] = ()
+
+
+class MiniMaxChatResult(BaseModel):
+    """Normalized provider response; callers decide what may be persisted."""
+
+    model_config = ConfigDict(frozen=True, strict=True)
+
+    provider_request_id: str
+    content: str
+    reasoning_content: str | None = None
+    finish_reason: str
+    usage: TokenUsage
+    raw_response_digest: str
+
+
+class MiniMaxChatClient:
+    """Role-neutral MiniMax chat transport with bounded, sanitized retries."""
 
     def __init__(
         self,
-        policy_id: PolicyId,
         config: MiniMaxConfig,
         *,
         client: httpx.AsyncClient | None = None,
         sleeper: Sleeper = asyncio.sleep,
     ) -> None:
-        self._policy_id = policy_id
         self._config = config
         self._client = client
         self._sleeper = sleeper
@@ -104,14 +126,10 @@ class MiniMaxEvaluationPolicy:
         )
 
     @property
-    def policy_id(self) -> PolicyId:
-        return self._policy_id
-
-    @property
     def revision(self) -> ExternalModelRevision:
         return self._revision
 
-    async def generate(self, request: EvaluationGenerationRequest) -> EvaluationGenerationResult:
+    async def complete(self, request: MiniMaxChatRequest) -> MiniMaxChatResult:
         sampling_params = dict(request.sampling_params)
         sampling_params.setdefault("temperature", 1.0)
         sampling_params.setdefault("top_p", 0.95)
@@ -138,10 +156,7 @@ class MiniMaxEvaluationPolicy:
 
         choice = parsed.choices[0]
         content, inline_reasoning = _split_inline_thinking(choice.message.content)
-        return EvaluationGenerationResult(
-            request_id=request.request_id,
-            policy_id=self.policy_id,
-            revision=self.revision,
+        return MiniMaxChatResult(
             provider_request_id=parsed.id,
             content=content,
             reasoning_content=(
@@ -154,11 +169,6 @@ class MiniMaxEvaluationPolicy:
                 total_tokens=parsed.usage.total_tokens,
             ),
             raw_response_digest=hashlib.sha256(response.content).hexdigest(),
-            capabilities=PolicyCapabilities(
-                trainable=False,
-                returns_token_ids=False,
-                returns_old_log_probs=False,
-            ),
         )
 
     async def _request_and_parse(
@@ -220,6 +230,53 @@ class MiniMaxEvaluationPolicy:
             await self._sleeper(_retry_delay(attempt))
 
         raise AssertionError("retry loop must return or raise")
+
+
+class MiniMaxEvaluationPolicy:
+    """Calls MiniMax for text evaluation without claiming trainable provenance."""
+
+    def __init__(
+        self,
+        policy_id: PolicyId,
+        config: MiniMaxConfig,
+        *,
+        client: httpx.AsyncClient | None = None,
+        sleeper: Sleeper = asyncio.sleep,
+    ) -> None:
+        self._policy_id = policy_id
+        self._chat = MiniMaxChatClient(config, client=client, sleeper=sleeper)
+
+    @property
+    def policy_id(self) -> PolicyId:
+        return self._policy_id
+
+    @property
+    def revision(self) -> ExternalModelRevision:
+        return self._chat.revision
+
+    async def generate(self, request: EvaluationGenerationRequest) -> EvaluationGenerationResult:
+        chat_result = await self._chat.complete(
+            MiniMaxChatRequest(
+                messages=request.messages,
+                sampling_params=request.sampling_params,
+            )
+        )
+        return EvaluationGenerationResult(
+            request_id=request.request_id,
+            policy_id=self.policy_id,
+            revision=self.revision,
+            provider_request_id=chat_result.provider_request_id,
+            content=chat_result.content,
+            reasoning_content=chat_result.reasoning_content,
+            finish_reason=chat_result.finish_reason,
+            usage=chat_result.usage,
+            raw_response_digest=chat_result.raw_response_digest,
+            capabilities=PolicyCapabilities(
+                trainable=False,
+                returns_token_ids=False,
+                returns_old_log_probs=False,
+            ),
+        )
 
 
 def _retry_delay(attempt: int) -> float:

@@ -14,12 +14,15 @@ import io
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from heterospawn.domain.ids import TaskId
 from heterospawn.errors import BenchmarkDataError
+
+if TYPE_CHECKING:
+    from heterospawn.evaluation.judges import JudgeService
 
 XBENCH_UPSTREAM_REVISION = "17c562192cc7e62215bfb98b65e9f8806fb95504"
 XBENCH_DATASET_PATH = "data/DeepSearch-2510.csv"
@@ -68,6 +71,34 @@ class RepeatExactScoreReport(BaseModel):
     average_exact_accuracy: float = Field(ge=0.0, le=1.0)
     best_of_n_correct_tasks: int = Field(ge=0)
     best_of_n_exact_accuracy: float = Field(ge=0.0, le=1.0)
+
+
+class JudgedRepeatScoreReport(BaseModel):
+    """Repeat metrics using a non-official provider through the pinned judge prompt."""
+
+    model_config = ConfigDict(frozen=True, strict=True)
+
+    benchmark: str
+    dataset_revision: str
+    evaluator_revision: str
+    mode: Literal["development-minimax-judge"] = "development-minimax-judge"
+    comparable_to_official: Literal[False] = False
+    tasks: int = Field(ge=0)
+    repeats_per_task: int = Field(ge=1)
+    completed_episodes: int = Field(ge=0)
+    correct_episodes: int = Field(ge=0)
+    total_episodes: int = Field(ge=0)
+    average_accuracy: float = Field(ge=0.0, le=1.0)
+    best_of_n_correct_tasks: int = Field(ge=0)
+    best_of_n_accuracy: float = Field(ge=0.0, le=1.0)
+    direct_exact_matches: int = Field(ge=0)
+    judge_calls: int = Field(ge=0)
+    judge_failures: int = Field(ge=0)
+    judge_prompt_tokens: int = Field(ge=0)
+    judge_completion_tokens: int = Field(ge=0)
+    judge_total_tokens: int = Field(ge=0)
+    judge_latency_ms: int = Field(ge=0)
+    judge_response_digests: tuple[str, ...]
 
 
 @dataclass(frozen=True, repr=False)
@@ -195,6 +226,104 @@ class XBenchDataset:
             average_exact_accuracy=(exact_correct / total_episodes) if total_episodes else 0.0,
             best_of_n_correct_tasks=best_correct,
             best_of_n_exact_accuracy=(best_correct / task_count) if task_count else 0.0,
+        )
+
+    async def evaluate_repeat_with_judge(
+        self,
+        predictions: dict[TaskId, tuple[str | None, ...]],
+        *,
+        task_ids: tuple[TaskId, ...],
+        repeats_per_task: int,
+        judge: JudgeService,
+    ) -> JudgedRepeatScoreReport:
+        """Apply the direct-match shortcut, then a development judge to mismatches."""
+
+        from heterospawn.errors import JudgeRequestError
+        from heterospawn.evaluation.judges import JudgeRequest
+
+        if judge.revision.comparable_to_official:
+            raise BenchmarkDataError("development judge cannot claim official comparability")
+        if repeats_per_task < 1:
+            raise BenchmarkDataError("repeats_per_task must be at least one")
+        selected_tasks = self.select_tasks(task_ids)
+        if frozenset(predictions) != frozenset(task_ids):
+            raise BenchmarkDataError("repeat score predictions do not match task selection")
+        record_by_id = {record.task.task_id: record for record in self._records}
+
+        completed = 0
+        correct_count = 0
+        best_correct = 0
+        direct_exact = 0
+        judge_calls = 0
+        judge_failures = 0
+        judge_prompt_tokens = 0
+        judge_completion_tokens = 0
+        judge_total_tokens = 0
+        judge_latency_ms = 0
+        response_digests: list[str] = []
+        for task in selected_tasks:
+            task_predictions = predictions[task.task_id]
+            if len(task_predictions) != repeats_per_task:
+                raise BenchmarkDataError("repeat score prediction count does not match manifest")
+            task_has_correct = False
+            record = record_by_id[task.task_id]
+            for repeat_index, prediction in enumerate(task_predictions):
+                if prediction is None:
+                    continue
+                completed += 1
+                if parse_final_answer(prediction) == record.answer:
+                    direct_exact += 1
+                    correct_count += 1
+                    task_has_correct = True
+                    continue
+                judge_calls += 1
+                try:
+                    result = await judge.judge(
+                        JudgeRequest(
+                            request_id=(
+                                f"{task.task_id}:repeat-{repeat_index + 1}:development-judge"
+                            ),
+                            task_id=task.task_id,
+                            question=task.prompt,
+                            correct_answer=record.answer,
+                            response=prediction,
+                        )
+                    )
+                except JudgeRequestError:
+                    judge_failures += 1
+                    continue
+                response_digests.append(result.provider_response_digest)
+                judge_prompt_tokens += result.usage.prompt_tokens
+                judge_completion_tokens += result.usage.completion_tokens
+                judge_total_tokens += result.usage.total_tokens
+                judge_latency_ms += result.latency_ms
+                if result.correct:
+                    correct_count += 1
+                    task_has_correct = True
+            best_correct += int(task_has_correct)
+
+        total_episodes = len(selected_tasks) * repeats_per_task
+        task_count = len(selected_tasks)
+        return JudgedRepeatScoreReport(
+            benchmark="xbench-DeepSearch-2510",
+            dataset_revision=XBENCH_UPSTREAM_REVISION,
+            evaluator_revision=XBENCH_UPSTREAM_REVISION,
+            tasks=task_count,
+            repeats_per_task=repeats_per_task,
+            completed_episodes=completed,
+            correct_episodes=correct_count,
+            total_episodes=total_episodes,
+            average_accuracy=(correct_count / total_episodes) if total_episodes else 0.0,
+            best_of_n_correct_tasks=best_correct,
+            best_of_n_accuracy=(best_correct / task_count) if task_count else 0.0,
+            direct_exact_matches=direct_exact,
+            judge_calls=judge_calls,
+            judge_failures=judge_failures,
+            judge_prompt_tokens=judge_prompt_tokens,
+            judge_completion_tokens=judge_completion_tokens,
+            judge_total_tokens=judge_total_tokens,
+            judge_latency_ms=judge_latency_ms,
+            judge_response_digests=tuple(response_digests),
         )
 
 

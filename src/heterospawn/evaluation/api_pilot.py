@@ -12,10 +12,13 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from heterospawn.benchmarks.xbench import (
     XBENCH_UPSTREAM_REVISION,
+    JudgedRepeatScoreReport,
     RepeatExactScoreReport,
     XBenchDataset,
 )
 from heterospawn.domain.ids import EpisodeId, TaskId
+from heterospawn.errors import EpisodeRunError
+from heterospawn.evaluation.judges import JudgeRevision, JudgeService
 from heterospawn.orchestration.api_episode import ApiEpisodeOrchestrator
 from heterospawn.orchestration.models import EpisodeTrace
 from heterospawn.policies.base import (
@@ -39,6 +42,7 @@ class ApiPilotConfig(BaseModel):
     repeats_per_task: int = Field(default=1, ge=1, le=20)
     search_backend: str = Field(min_length=1)
     search_revision: str = Field(min_length=1)
+    judge_mode: Literal["none", "minimax-development"] = "none"
     max_spawn_per_episode: int = Field(default=4, ge=1, le=32)
     max_concurrency: int = Field(default=4, ge=1, le=32)
     repair_attempts: int = Field(default=1, ge=0, le=4)
@@ -60,7 +64,7 @@ class PilotManifest(BaseModel):
     dataset_revision: str
     encrypted_source_sha256: str
     evaluator_revision: str
-    evaluator_mode: Literal["development-repeat-exact-only"] = "development-repeat-exact-only"
+    evaluator_mode: Literal["development-repeat-exact-only", "development-minimax-judge"]
     official_repeats: int = 5
     task_ids: tuple[TaskId, ...]
     repeats_per_task: int
@@ -68,6 +72,7 @@ class PilotManifest(BaseModel):
     policy_revision: ExternalModelRevision
     search_backend: str
     search_revision: str
+    judge_revision: JudgeRevision | None
     max_spawn_per_episode: int
     max_concurrency: int
     repair_attempts: int
@@ -107,7 +112,7 @@ class ApiPilotReport(BaseModel):
     manifest: PilotManifest
     manifest_digest: str
     episodes: tuple[PilotEpisodeSummary, ...]
-    score: RepeatExactScoreReport
+    score: RepeatExactScoreReport | JudgedRepeatScoreReport
     completed_episodes: int = Field(ge=0)
     failed_episodes: int = Field(ge=0)
     zero_spawn_episodes: int = Field(ge=0)
@@ -128,6 +133,7 @@ class ApiPilotRunner:
         search: SearchService,
         config: ApiPilotConfig,
         *,
+        judge: JudgeService | None = None,
         clock: Clock = time.monotonic,
         progress_callback: ProgressCallback | None = None,
     ) -> None:
@@ -135,8 +141,13 @@ class ApiPilotRunner:
         self._policy = policy
         self._search = search
         self._config = config
+        self._judge = judge
         self._clock = clock
         self._progress_callback = progress_callback
+        if (config.judge_mode == "none") != (judge is None):
+            raise ValueError("judge service and configured judge mode must agree")
+        if judge is not None and judge.revision.mode != config.judge_mode:
+            raise ValueError("judge service revision does not match configured judge mode")
 
     async def run(self) -> ApiPilotReport:
         tasks = self._dataset.select_tasks(self._config.task_ids)
@@ -164,6 +175,16 @@ class ApiPilotRunner:
                     self._validate_search_revision(trace)
                     predictions[task.task_id].append(trace.answer)
                     summary = _completed_summary(task.task_id, repeat_index, trace, latency_ms)
+                except EpisodeRunError as exc:
+                    predictions[task.task_id].append(None)
+                    summary = _failed_summary(
+                        task.task_id,
+                        repeat_index,
+                        episode_id,
+                        _elapsed_ms(start, self._clock()),
+                        exc.error_code,
+                        failure=exc,
+                    )
                 except Exception as exc:
                     predictions[task.task_id].append(None)
                     summary = _failed_summary(
@@ -180,11 +201,21 @@ class ApiPilotRunner:
         frozen_predictions = {
             task_id: tuple(task_predictions) for task_id, task_predictions in predictions.items()
         }
-        score = self._dataset.evaluate_repeat_exact(
-            frozen_predictions,
-            task_ids=self._config.task_ids,
-            repeats_per_task=self._config.repeats_per_task,
-        )
+        if self._judge is None:
+            score: RepeatExactScoreReport | JudgedRepeatScoreReport = (
+                self._dataset.evaluate_repeat_exact(
+                    frozen_predictions,
+                    task_ids=self._config.task_ids,
+                    repeats_per_task=self._config.repeats_per_task,
+                )
+            )
+        else:
+            score = await self._dataset.evaluate_repeat_with_judge(
+                frozen_predictions,
+                task_ids=self._config.task_ids,
+                repeats_per_task=self._config.repeats_per_task,
+                judge=self._judge,
+            )
         episodes = tuple(summaries)
         completed = tuple(item for item in episodes if item.status == "completed")
         return ApiPilotReport(
@@ -195,10 +226,10 @@ class ApiPilotRunner:
             completed_episodes=len(completed),
             failed_episodes=len(episodes) - len(completed),
             zero_spawn_episodes=sum(item.spawn_count == 0 for item in completed),
-            total_spawn_count=sum(item.spawn_count for item in completed),
-            total_prompt_tokens=sum(item.prompt_tokens for item in completed),
-            total_completion_tokens=sum(item.completion_tokens for item in completed),
-            total_tokens=sum(item.total_tokens for item in completed),
+            total_spawn_count=sum(item.spawn_count for item in episodes),
+            total_prompt_tokens=sum(item.prompt_tokens for item in episodes),
+            total_completion_tokens=sum(item.completion_tokens for item in episodes),
+            total_tokens=sum(item.total_tokens for item in episodes),
             total_latency_ms=sum(item.latency_ms for item in episodes),
         )
 
@@ -208,11 +239,17 @@ class ApiPilotRunner:
             dataset_revision=XBENCH_UPSTREAM_REVISION,
             encrypted_source_sha256=self._dataset.source_digest,
             evaluator_revision=XBENCH_UPSTREAM_REVISION,
+            evaluator_mode=(
+                "development-minimax-judge"
+                if self._judge is not None
+                else "development-repeat-exact-only"
+            ),
             task_ids=self._config.task_ids,
             repeats_per_task=self._config.repeats_per_task,
             policy_revision=self._policy.revision,
             search_backend=self._config.search_backend,
             search_revision=self._config.search_revision,
+            judge_revision=self._judge.revision if self._judge is not None else None,
             max_spawn_per_episode=self._config.max_spawn_per_episode,
             max_concurrency=self._config.max_concurrency,
             repair_attempts=self._config.repair_attempts,
@@ -264,6 +301,8 @@ def _failed_summary(
     episode_id: EpisodeId,
     latency_ms: int,
     error_code: str,
+    *,
+    failure: EpisodeRunError | None = None,
 ) -> PilotEpisodeSummary:
     return PilotEpisodeSummary(
         task_id=task_id,
@@ -271,15 +310,15 @@ def _failed_summary(
         episode_id=episode_id,
         status="failed",
         error_code=error_code,
-        spawn_count=0,
-        successful_subs=0,
-        failed_subs=0,
-        main_attempts=0,
-        invalid_main_attempts=0,
-        event_count=0,
-        prompt_tokens=0,
-        completion_tokens=0,
-        total_tokens=0,
+        spawn_count=failure.spawn_count if failure is not None else 0,
+        successful_subs=failure.successful_subs if failure is not None else 0,
+        failed_subs=failure.failed_subs if failure is not None else 0,
+        main_attempts=failure.main_attempts if failure is not None else 0,
+        invalid_main_attempts=failure.invalid_main_attempts if failure is not None else 0,
+        event_count=failure.event_count if failure is not None else 0,
+        prompt_tokens=failure.prompt_tokens if failure is not None else 0,
+        completion_tokens=failure.completion_tokens if failure is not None else 0,
+        total_tokens=failure.total_tokens if failure is not None else 0,
         latency_ms=latency_ms,
         trainable=False,
     )

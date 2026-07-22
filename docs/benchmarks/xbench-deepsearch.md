@@ -67,6 +67,24 @@ heterospawn run-api-pilot data/private/xbench/DeepSearch-2510.csv \
 
 The default task set is `101, 102, 103`; explicit IDs are preferred for recorded runs. The manifest pins dataset/evaluator/model/search revisions, resolved sampling parameters, repeat count, execution mode, repair count, concurrency, and a maximum of four Sub instances per episode. Safe progress lines are written after each episode. Prompts, answers, evidence, search result bodies, provider error bodies, and reasoning are never included.
 
+### MiniMax development Judge
+
+MiniMax can exercise the complete judge path without another credential:
+
+```bash
+heterospawn run-api-pilot data/private/xbench/DeepSearch-2510.csv \
+  --allow-network \
+  --search-backend minimax-mcp \
+  --judge-backend minimax-development \
+  --task-id 101 \
+  --repeats 5 \
+  --run-id xbench-minimax-judge-5repeat
+```
+
+The adapter uses the byte-pinned upstream judge prompt and direct-match shortcut. A MiniMax verdict is always reported as `development-minimax-judge` with `comparable_to_official: false`. One versioned format-repair attempt may ask MiniMax to restate an invalid verdict in the required three-line schema; this retry changes neither the reference answer nor the correctness criteria. Judge token usage, latency, failures, prompt revision, repair revision, and response digests are reported without persisting judge text.
+
+`gemini-official` remains a reserved compatibility mode. It will require a separate Google credential and an adapter that reproduces the pinned upstream API behavior before any report may claim official comparability.
+
 The command emits no ground truth and labels its exact-only score non-comparable. API traces are evaluation-only because provider responses do not supply the exact rollout token IDs, old log-probabilities, or `RolloutRevision` required for RL training.
 
 References: [pinned xbench evaluator](https://github.com/xbench-ai/xbench-evals/tree/17c562192cc7e62215bfb98b65e9f8806fb95504), [MiniMax OpenAI-compatible API](https://platform.minimaxi.com/docs/api-reference/api-overview), [MiniMax Token Plan MCP](https://platform.minimaxi.com/docs/guides/token-plan-mcp-guide), [Tavily Search API](https://docs.tavily.com/documentation/api-reference/endpoint/search).

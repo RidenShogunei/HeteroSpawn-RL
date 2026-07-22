@@ -16,6 +16,7 @@ The first implementation must distinguish benchmark misuse from model-rollout fa
 - Treat external-API episodes as evaluation-only. They cannot enter a training batch unless exact rollout tokens, old log-probabilities, and a rollout revision are available.
 - Keep ground truth inside the evaluator. Policies receive only task input and budget.
 - Preserve an official-comparability mode matching the pinned xbench evaluator. Development-only judges must be labeled non-comparable.
+- Allow provider-neutral development judges to validate scoring control flow, but hard-code their reports as non-official; changing providers can never be a configuration-only path to official comparability.
 
 ## Consequences
 
@@ -27,3 +28,4 @@ This vertical slice validates task loading, orchestration, search, output parsin
 - Decrypted answers never appear in policy inputs, traces, logs, or tracked files.
 - Mock 0/1/4-Sub episodes pass without network access.
 - Live tests are opt-in and skipped when credentials are absent.
+- Direct exact matches bypass the judge; development judge prompts, failures, usage, latency, and revisions are auditable without exposing evaluator inputs or verdict text.
