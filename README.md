@@ -27,4 +27,4 @@ The first runnable slice is documented in [docs/benchmarks/xbench-deepsearch.md]
 
 ## Current status
 
-Architecture Baseline v0.2 and Milestone 0 are complete. The current Milestone 1 validation runs fixed xbench-DeepSearch task sets through fresh MiniMax episodes and an independently observable search backend before any local-model rollout work.
+Architecture Baseline v0.2, the API-first benchmark slice, and the Milestone 2 CPU training contracts are complete. Exact-token local-model rollout remains an opt-in backend: API-backed episodes continue to be explicitly non-trainable.
