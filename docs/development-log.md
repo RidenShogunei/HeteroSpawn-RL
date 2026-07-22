@@ -15,3 +15,5 @@ This file records milestone-level events. Fine-grained work remains in GitHub is
 - Validated strict actions, 0/1/4 Sub episodes, repair traces, partial Sub failure, adapters, and version contracts with 18 offline tests.
 - Completed real MiniMax-M2.7 smoke validation: a synthetic 1-Sub Main → Sub → Main episode and xbench task 101 both reached terminal answers.
 - Fixed live-only findings for inline thinking normalization, scoped single-task scoring, sanitized schema diagnostics, and bounded retry of HTTP-200 schema failures.
+- Validated MiniMax Token Plan MCP `web_search` with the existing credential and completed a real M2.7 Main → MCP search → Sub → Main episode.
+- Pinned `minimax-coding-plan-mcp==0.0.4` and restricted its subprocess environment to avoid inheriting unrelated credentials.

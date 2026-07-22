@@ -22,7 +22,7 @@ An official-comparable report requires the pinned upstream evaluator, its judge 
 
 ## API smoke run
 
-The runnable first architecture uses MiniMax for Main/Sub policy calls and Tavily as an independently observable search service. Both credentials are environment-only. Network use and external credit spending require an explicit flag:
+The runnable first architecture uses MiniMax for Main/Sub policy calls and a provider-neutral search service. Credentials are environment-only. Network use and external credit spending require an explicit flag:
 
 ```bash
 set MINIMAX_API_KEY=<rotated-local-secret>
@@ -42,6 +42,14 @@ The synthetic conformance command forces one real Main → Sub → Main path wit
 heterospawn run-api-conformance --allow-network
 ```
 
+To use MiniMax's pinned Token Plan MCP `web_search` instead of a separate Tavily key:
+
+```bash
+heterospawn run-api-conformance --allow-network --search-backend minimax-mcp
+```
+
+This backend requires `uvx` on `PATH` and a MiniMax Token Plan credential in `MINIMAX_API_KEY`. The subprocess package is pinned by the adapter; no Tavily credential is used.
+
 The command emits no ground truth and labels its exact-only score non-comparable. API traces are evaluation-only because provider responses do not supply the exact rollout token IDs, old log-probabilities, or `RolloutRevision` required for RL training.
 
-References: [MiniMax OpenAI-compatible API](https://platform.minimaxi.com/docs/api-reference/api-overview), [Tavily Search API](https://docs.tavily.com/documentation/api-reference/endpoint/search).
+References: [MiniMax OpenAI-compatible API](https://platform.minimaxi.com/docs/api-reference/api-overview), [MiniMax Token Plan MCP](https://platform.minimaxi.com/docs/guides/token-plan-mcp-guide), [Tavily Search API](https://docs.tavily.com/documentation/api-reference/endpoint/search).
