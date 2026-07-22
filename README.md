@@ -34,6 +34,10 @@ python -m venv .venv
 
 The smoke uses the pinned `Qwen/Qwen2.5-0.5B-Instruct` commit with FP16 and separate Main/Sub LoRA train and rollout adapters. Checkpoints and the credential-safe JSON report are written under ignored `artifacts/`. A previously downloaded model directory can be supplied with `--model-path`; its weight SHA-256 must match the pinned revision.
 
+### Remote backend capability spikes
+
+Remote agents must follow [the remote backend spike runbook](docs/runbooks/remote-backend-spike.md) and run `python3 scripts/remote_preflight.py` before installing or evaluating verl/RLinf. The runbook keeps candidate environments isolated, forbids credentials and benchmark data, and defines the evidence required before a backend-selection ADR.
+
 API keys are read only from environment variables. Copy `.env.example` to `.env` for local use, and never commit the resulting file. API-backed episodes are evaluation artifacts and are not eligible for RL training unless the policy backend supplies exact rollout token IDs, old log-probabilities, and an auditable rollout revision.
 
 The first runnable slice is documented in [docs/benchmarks/xbench-deepsearch.md](docs/benchmarks/xbench-deepsearch.md). It keeps xbench ground truth behind the evaluator, uses MiniMax through the current OpenAI-compatible endpoint for policy calls and optional development judging, and keeps search behind a provider-neutral interface with deterministic mock, Tavily, and MiniMax Token Plan MCP backends.
