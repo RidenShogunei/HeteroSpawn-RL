@@ -83,6 +83,8 @@ heterospawn run-api-pilot data/private/xbench/DeepSearch-2510.csv \
 
 The adapter uses the byte-pinned upstream judge prompt and direct-match shortcut. A MiniMax verdict is always reported as `development-minimax-judge` with `comparable_to_official: false`. One versioned format-repair attempt may ask MiniMax to restate an invalid verdict in the required three-line schema; this retry changes neither the reference answer nor the correctness criteria. Judge token usage, latency, failures, prompt revision, repair revision, and response digests are reported without persisting judge text.
 
+Pilot reports also include deterministic task-level aggregates, sorted failure counts, Sub and invalid-Main totals, and nearest-rank p50/p95/max episode latency. This makes task-shape and long-tail differences auditable without persisting benchmark or model text.
+
 `gemini-official` remains a reserved compatibility mode. It will require a separate Google credential and an adapter that reproduces the pinned upstream API behavior before any report may claim official comparability.
 
 The command emits no ground truth and labels its exact-only score non-comparable. API traces are evaluation-only because provider responses do not supply the exact rollout token IDs, old log-probabilities, or `RolloutRevision` required for RL training.

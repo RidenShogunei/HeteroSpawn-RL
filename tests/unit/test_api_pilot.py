@@ -120,7 +120,7 @@ async def test_pilot_runs_fresh_repeats_and_emits_only_safe_aggregates(
     )
     dataset = load_xbench(fixture, verify_official_digest=False)
     policy = PilotPolicy()
-    clock_values = iter(index / 10 for index in range(8))
+    clock_values = iter((0.0, 0.1, 1.0, 1.3, 2.0, 2.2, 3.0, 3.4))
     progress = []
 
     report = await ApiPilotRunner(
@@ -143,8 +143,25 @@ async def test_pilot_runs_fresh_repeats_and_emits_only_safe_aggregates(
     assert report.completed_episodes == 4
     assert progress == list(report.episodes)
     assert report.failed_episodes == 0
+    assert report.failure_counts == ()
     assert report.zero_spawn_episodes == 4
     assert report.total_tokens == 12
+    assert report.successful_subs == 0
+    assert report.failed_subs == 0
+    assert report.invalid_main_attempts == 0
+    assert report.latency_p50_ms == 200
+    assert report.latency_p95_ms == 400
+    assert report.latency_max_ms == 400
+    assert [summary.task_id for summary in report.task_summaries] == [
+        TaskId("synthetic-1"),
+        TaskId("synthetic-2"),
+    ]
+    assert all(summary.attempted_episodes == 2 for summary in report.task_summaries)
+    assert all(summary.completed_episodes == 2 for summary in report.task_summaries)
+    assert report.task_summaries[0].latency_p50_ms == 100
+    assert report.task_summaries[0].latency_p95_ms == 300
+    assert report.task_summaries[1].latency_p50_ms == 200
+    assert report.task_summaries[1].latency_p95_ms == 400
     assert report.score.exact_correct_episodes == 2
     assert report.score.average_exact_accuracy == 0.5
     assert report.score.best_of_n_exact_accuracy == 0.5
@@ -176,12 +193,16 @@ async def test_pilot_retains_safe_usage_for_exhausted_invalid_actions(
 
     assert report.completed_episodes == 0
     assert report.failed_episodes == 1
+    assert report.failure_counts == (("InvalidActionError", 1),)
     assert report.episodes[0].error_code == "InvalidActionError"
     assert report.episodes[0].main_attempts == 2
     assert report.episodes[0].invalid_main_attempts == 2
     assert report.episodes[0].event_count == 2
     assert report.episodes[0].total_tokens == 6
     assert report.total_tokens == 6
+    assert report.invalid_main_attempts == 2
+    assert report.task_summaries[0].failure_counts == (("InvalidActionError", 1),)
+    assert report.task_summaries[0].total_tokens == 6
     assert "sensitive invalid action" not in report.model_dump_json()
 
 
@@ -209,7 +230,10 @@ async def test_pilot_isolates_episode_failures_without_persisting_error_text(
 
     assert report.completed_episodes == 1
     assert report.failed_episodes == 1
+    assert report.failure_counts == (("RuntimeError", 1),)
     assert report.episodes[1].error_code == "RuntimeError"
+    assert report.task_summaries[0].completed_episodes == 1
+    assert report.task_summaries[1].failed_episodes == 1
     assert report.score.total_episodes == 2
     assert "private provider body" not in report.model_dump_json()
 
