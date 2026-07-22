@@ -30,6 +30,7 @@ async def test_minimax_adapter_uses_current_endpoint_and_is_not_trainable() -> N
         payload = json.loads(request.content)
         assert payload["model"] == "MiniMax-M2.7"
         assert payload["max_completion_tokens"] == 4096
+        assert payload["reasoning_split"] is True
         return httpx.Response(
             200,
             json={
@@ -37,7 +38,7 @@ async def test_minimax_adapter_uses_current_endpoint_and_is_not_trainable() -> N
                 "choices": [
                     {
                         "finish_reason": "stop",
-                        "message": {"content": "answer", "reasoning_content": "reason"},
+                        "message": {"content": "<think>reason</think>\nanswer"},
                     }
                 ],
                 "usage": {
@@ -91,3 +92,43 @@ async def test_minimax_adapter_retries_without_exposing_response_body() -> None:
     assert delays == [0.5]
     assert "sensitive-provider-body" not in str(raised.value)
     assert "test-key" not in str(raised.value)
+
+
+@pytest.mark.asyncio
+async def test_minimax_adapter_retries_http_200_with_invalid_schema() -> None:
+    attempts = 0
+    delays: list[float] = []
+
+    async def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return httpx.Response(200, json={"unexpected": "sensitive-provider-body"})
+        return httpx.Response(
+            200,
+            json={
+                "id": "provider-request-2",
+                "choices": [{"finish_reason": "stop", "message": {"content": "answer"}}],
+                "usage": {
+                    "prompt_tokens": 1,
+                    "completion_tokens": 1,
+                    "total_tokens": 2,
+                },
+            },
+        )
+
+    async def record_delay(delay: float) -> None:
+        delays.append(delay)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        policy = MiniMaxEvaluationPolicy(
+            PolicyId("main-policy"),
+            MiniMaxConfig(api_key=SecretStr("test-key"), max_attempts=2),
+            client=client,
+            sleeper=record_delay,
+        )
+        result = await policy.generate(_request())
+
+    assert attempts == 2
+    assert delays == [0.5]
+    assert result.content == "answer"

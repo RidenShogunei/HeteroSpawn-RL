@@ -92,5 +92,5 @@ def parse_main_action(content: str) -> MainAction:
 
     try:
         return _ACTION_ADAPTER.validate_json(content, strict=True)
-    except ValidationError as exc:
-        raise InvalidActionError("main output is not a valid ANSWER or non-empty SPAWN") from exc
+    except ValidationError:
+        raise InvalidActionError("main output is not a valid ANSWER or non-empty SPAWN") from None

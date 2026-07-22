@@ -70,19 +70,33 @@ class XBenchDataset:
     def source_digest(self) -> str:
         return self._source_digest
 
-    def evaluate_exact(self, predictions: dict[TaskId, str]) -> ExactScoreReport:
+    def evaluate_exact(
+        self,
+        predictions: dict[TaskId, str],
+        *,
+        task_ids: tuple[TaskId, ...] | None = None,
+    ) -> ExactScoreReport:
         """Run only xbench's deterministic exact-match shortcut.
 
         Upstream sends non-exact responses to a Gemini judge. Because that
         fallback is absent here, this mode is always marked non-comparable.
         """
 
+        selected_records = self._records
+        if task_ids is not None:
+            requested = frozenset(task_ids)
+            selected_records = tuple(
+                record for record in self._records if record.task.task_id in requested
+            )
+            if len(selected_records) != len(requested):
+                raise BenchmarkDataError("score scope contains an unknown task id")
+
         correct = 0
-        for record in self._records:
+        for record in selected_records:
             prediction = predictions.get(record.task.task_id)
             if prediction is not None and parse_final_answer(prediction) == record.answer:
                 correct += 1
-        total = len(self._records)
+        total = len(selected_records)
         return ExactScoreReport(
             benchmark="xbench-DeepSearch-2510",
             dataset_revision=XBENCH_UPSTREAM_REVISION,

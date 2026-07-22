@@ -58,6 +58,15 @@ def test_official_digest_is_required_by_default(tmp_path: Path) -> None:
         load_xbench(fixture)
 
 
+def test_score_scope_rejects_unknown_task_ids(tmp_path: Path) -> None:
+    fixture = tmp_path / "synthetic.csv"
+    _write_synthetic_fixture(fixture)
+    dataset = load_xbench(fixture, verify_official_digest=False)
+
+    with pytest.raises(BenchmarkDataError, match="unknown task id"):
+        dataset.evaluate_exact({}, task_ids=(TaskId("missing"),))
+
+
 @pytest.mark.parametrize(
     ("response", "expected"),
     [

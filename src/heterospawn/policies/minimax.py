@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import os
+import re
 from collections.abc import Awaitable, Callable
 
 import httpx
@@ -115,6 +116,7 @@ class MiniMaxEvaluationPolicy:
         sampling_params.setdefault("temperature", 1.0)
         sampling_params.setdefault("top_p", 0.95)
         sampling_params.setdefault("max_completion_tokens", 4096)
+        sampling_params.setdefault("reasoning_split", True)
         payload: dict[str, object] = {
             "model": self._config.model,
             "messages": [message.model_dump(mode="json") for message in request.messages],
@@ -127,24 +129,24 @@ class MiniMaxEvaluationPolicy:
         endpoint = f"{self._config.base_url.rstrip('/')}/chat/completions"
 
         if self._client is not None:
-            response = await self._request_with_retries(self._client, endpoint, headers, payload)
+            response, parsed = await self._request_and_parse(
+                self._client, endpoint, headers, payload
+            )
         else:
             async with httpx.AsyncClient(timeout=self._config.timeout_seconds) as client:
-                response = await self._request_with_retries(client, endpoint, headers, payload)
-
-        try:
-            parsed = _ChatCompletionResponse.model_validate_json(response.content, strict=True)
-        except (ValueError, ValidationError) as exc:
-            raise ProviderRequestError("MiniMax returned an invalid response schema") from exc
+                response, parsed = await self._request_and_parse(client, endpoint, headers, payload)
 
         choice = parsed.choices[0]
+        content, inline_reasoning = _split_inline_thinking(choice.message.content)
         return EvaluationGenerationResult(
             request_id=request.request_id,
             policy_id=self.policy_id,
             revision=self.revision,
             provider_request_id=parsed.id,
-            content=choice.message.content,
-            reasoning_content=choice.message.reasoning_content or choice.message.reasoning,
+            content=content,
+            reasoning_content=(
+                choice.message.reasoning_content or choice.message.reasoning or inline_reasoning
+            ),
             finish_reason=choice.finish_reason,
             usage=TokenUsage(
                 prompt_tokens=parsed.usage.prompt_tokens,
@@ -158,6 +160,35 @@ class MiniMaxEvaluationPolicy:
                 returns_old_log_probs=False,
             ),
         )
+
+    async def _request_and_parse(
+        self,
+        client: httpx.AsyncClient,
+        endpoint: str,
+        headers: dict[str, str],
+        payload: dict[str, object],
+    ) -> tuple[httpx.Response, _ChatCompletionResponse]:
+        last_schema_error = "unknown"
+        for attempt in range(1, self._config.max_attempts + 1):
+            response = await self._request_with_retries(client, endpoint, headers, payload)
+            try:
+                parsed = _ChatCompletionResponse.model_validate_json(response.content, strict=True)
+                return response, parsed
+            except ValidationError as exc:
+                last_schema_error = ", ".join(
+                    f"{'.'.join(str(part) for part in error['loc'])}:{error['type']}"
+                    for error in exc.errors(include_input=False)
+                )
+            except ValueError:
+                last_schema_error = "non-json"
+
+            if attempt < self._config.max_attempts:
+                await self._sleeper(_retry_delay(attempt))
+
+        raise ProviderRequestError(
+            "MiniMax returned an invalid response schema "
+            f"after bounded retries ({last_schema_error})"
+        ) from None
 
     async def _request_with_retries(
         self,
@@ -194,3 +225,12 @@ class MiniMaxEvaluationPolicy:
 def _retry_delay(attempt: int) -> float:
     delay = 0.5 * (2.0 ** (attempt - 1))
     return min(delay, 4.0)
+
+
+def _split_inline_thinking(content: str) -> tuple[str, str | None]:
+    """Normalize MiniMax responses that inline a leading `<think>` block."""
+
+    match = re.fullmatch(r"\s*<think>(.*?)</think>\s*(.*)", content, flags=re.DOTALL)
+    if match is None:
+        return content, None
+    return match.group(2), match.group(1).strip()

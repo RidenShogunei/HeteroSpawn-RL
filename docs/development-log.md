@@ -13,3 +13,5 @@ This file records milestone-level events. Fine-grained work remains in GitHub is
 - Kept development exact-only scoring explicitly non-comparable to the official Gemini-judge protocol.
 - Verified the pinned encrypted file in place: 100 tasks and SHA-256 `a9378e56b05ec8f007b8ecc8f6ac74900abafd558267acd5839d0d05fbc6977a`; no decrypted field was persisted.
 - Validated strict actions, 0/1/4 Sub episodes, repair traces, partial Sub failure, adapters, and version contracts with 18 offline tests.
+- Completed real MiniMax-M2.7 smoke validation: a synthetic 1-Sub Main → Sub → Main episode and xbench task 101 both reached terminal answers.
+- Fixed live-only findings for inline thinking normalization, scoped single-task scoring, sanitized schema diagnostics, and bounded retry of HTTP-200 schema failures.

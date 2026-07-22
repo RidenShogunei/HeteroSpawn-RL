@@ -9,10 +9,12 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from heterospawn import __version__
-from heterospawn.benchmarks.xbench import load_xbench
+from heterospawn.benchmarks.xbench import BenchmarkTask, load_xbench
 from heterospawn.domain.ids import EpisodeId, PolicyId, TaskId
 from heterospawn.orchestration.api_episode import ApiEpisodeOrchestrator
 from heterospawn.policies.minimax import MiniMaxConfig, MiniMaxEvaluationPolicy
+from heterospawn.search.base import SearchService
+from heterospawn.search.mock import MockSearchService
 from heterospawn.search.tavily import TavilyConfig, TavilySearchService
 
 
@@ -32,6 +34,27 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("dataset", type=Path)
     run_parser.add_argument("task_id")
     run_parser.add_argument(
+        "--allow-network",
+        action="store_true",
+        help="required acknowledgement that this command spends external API credits",
+    )
+    run_parser.add_argument(
+        "--search-backend",
+        choices=("mock", "tavily"),
+        default="mock",
+        help="use deterministic local evidence or the live Tavily API",
+    )
+    run_parser.add_argument(
+        "--summary-only",
+        action="store_true",
+        help="omit model text and emit a credential-safe validation summary",
+    )
+
+    conformance_parser = subparsers.add_parser(
+        "run-api-conformance",
+        help="run a synthetic real-model episode that requires one Sub",
+    )
+    conformance_parser.add_argument(
         "--allow-network",
         action="store_true",
         help="required acknowledgement that this command spends external API credits",
@@ -57,33 +80,100 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "run-api-task":
         if not args.allow_network:
             raise SystemExit("--allow-network is required for external API calls")
-        return asyncio.run(_run_api_task(args.dataset, args.task_id))
+        return asyncio.run(
+            _run_api_task(
+                args.dataset,
+                args.task_id,
+                search_backend=args.search_backend,
+                summary_only=args.summary_only,
+            )
+        )
+    if args.command == "run-api-conformance":
+        if not args.allow_network:
+            raise SystemExit("--allow-network is required for external API calls")
+        return asyncio.run(_run_api_conformance())
     return 0
 
 
-async def _run_api_task(dataset_path: Path, task_id: str) -> int:
+async def _run_api_task(
+    dataset_path: Path,
+    task_id: str,
+    *,
+    search_backend: str,
+    summary_only: bool,
+) -> int:
     dataset = load_xbench(dataset_path)
     task = next((item for item in dataset.tasks if item.task_id == TaskId(task_id)), None)
     if task is None:
         raise SystemExit(f"task id not found: {task_id}")
 
     policy = MiniMaxEvaluationPolicy(PolicyId("shared-minimax"), MiniMaxConfig.from_environment())
-    search = TavilySearchService(TavilyConfig.from_environment())
+    search: SearchService
+    if search_backend == "tavily":
+        search = TavilySearchService(TavilyConfig.from_environment())
+    else:
+        search = MockSearchService()
     trace = await ApiEpisodeOrchestrator(policy, search).run(
         task,
         EpisodeId(f"api-{task_id}"),
     )
-    score = dataset.evaluate_exact({task.task_id: trace.answer})
-    print(
-        json.dumps(
-            {
-                "trace": trace.model_dump(mode="json"),
-                "score": score.model_dump(mode="json"),
-            },
-            ensure_ascii=False,
-            sort_keys=True,
-        )
+    score = dataset.evaluate_exact(
+        {task.task_id: trace.answer},
+        task_ids=(task.task_id,),
     )
+    if summary_only:
+        output = {
+            "task_id": trace.task_id,
+            "episode_id": trace.episode_id,
+            "model_provider": policy.revision.provider,
+            "model": policy.revision.model,
+            "search_backend": search_backend,
+            "spawn_count": trace.spawn_count,
+            "sub_statuses": [result.status for result in trace.sub_results],
+            "main_attempts": len(trace.main_attempts),
+            "invalid_main_attempts": sum(not attempt.valid for attempt in trace.main_attempts),
+            "event_count": len(trace.events),
+            "trainable": trace.trainable,
+            "score": score.model_dump(mode="json"),
+        }
+    else:
+        output = {
+            "trace": trace.model_dump(mode="json"),
+            "score": score.model_dump(mode="json"),
+        }
+    print(json.dumps(output, ensure_ascii=False, sort_keys=True))
+    return 0
+
+
+async def _run_api_conformance() -> int:
+    policy = MiniMaxEvaluationPolicy(PolicyId("shared-minimax"), MiniMaxConfig.from_environment())
+    trace = await ApiEpisodeOrchestrator(policy, MockSearchService()).run(
+        BenchmarkTask(
+            task_id=TaskId("api-conformance-1"),
+            prompt=(
+                "This is an orchestration conformance check. For the initial action, "
+                "you must SPAWN exactly one subtask asking for the capital of France. "
+                "After the Sub result arrives, return an ANSWER action."
+            ),
+        ),
+        EpisodeId("api-conformance-1"),
+    )
+    output = {
+        "task_id": trace.task_id,
+        "episode_id": trace.episode_id,
+        "model_provider": policy.revision.provider,
+        "model": policy.revision.model,
+        "search_backend": "mock",
+        "spawn_count": trace.spawn_count,
+        "sub_statuses": [result.status for result in trace.sub_results],
+        "main_attempts": len(trace.main_attempts),
+        "invalid_main_attempts": sum(not attempt.valid for attempt in trace.main_attempts),
+        "event_count": len(trace.events),
+        "trainable": trace.trainable,
+    }
+    print(json.dumps(output, ensure_ascii=False, sort_keys=True))
+    if trace.spawn_count != 1 or [result.status for result in trace.sub_results] != ["success"]:
+        raise SystemExit("live conformance episode did not complete the required one-Sub path")
     return 0
 
 

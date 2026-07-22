@@ -11,3 +11,4 @@ All notable project changes are recorded here. Architecture-changing decisions a
 - Pinned encrypted xbench-DeepSearch-2510 loader and non-comparable exact-only scorer.
 - MiniMax evaluation policy and Tavily search adapters with bounded retries.
 - API-first 0/1/4-Sub orchestration with structured repair and failure isolation.
+- Live MiniMax conformance mode, inline-thinking normalization, scoped smoke scoring, and bounded invalid-schema retry.

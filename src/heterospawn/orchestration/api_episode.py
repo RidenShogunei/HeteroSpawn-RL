@@ -144,7 +144,6 @@ class ApiEpisodeOrchestrator:
     ) -> tuple[MainAction, int]:
         current_messages = messages
         attempt_causes = causal_event_indices
-        last_error: InvalidActionError | None = None
         for attempt_index in range(self._repair_attempts + 1):
             result = await self._policy.generate(
                 EvaluationGenerationRequest(
@@ -163,11 +162,10 @@ class ApiEpisodeOrchestrator:
                 if require_answer and isinstance(action, SpawnAction):
                     raise InvalidActionError("final Main output must be ANSWER")
                 valid = True
-            except InvalidActionError as exc:
+            except InvalidActionError:
                 action = None
                 valid = False
                 error_code = "invalid_main_action"
-                last_error = exc
 
             attempts.append(
                 MainAttempt(
@@ -204,7 +202,7 @@ class ApiEpisodeOrchestrator:
                 ),
             )
 
-        raise InvalidActionError("Main exhausted action repair attempts") from last_error
+        raise InvalidActionError("Main exhausted action repair attempts") from None
 
     async def _run_sub(
         self,

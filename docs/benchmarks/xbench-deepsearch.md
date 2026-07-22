@@ -30,6 +30,18 @@ set TAVILY_API_KEY=<local-secret>
 heterospawn run-api-task data/private/xbench/DeepSearch-2510.csv 101 --allow-network
 ```
 
+For a model-only live conformance run, keep retrieval deterministic and suppress generated text:
+
+```bash
+heterospawn run-api-task data/private/xbench/DeepSearch-2510.csv 101 --allow-network --search-backend mock --summary-only
+```
+
+The synthetic conformance command forces one real Main → Sub → Main path without exposing benchmark text:
+
+```bash
+heterospawn run-api-conformance --allow-network
+```
+
 The command emits no ground truth and labels its exact-only score non-comparable. API traces are evaluation-only because provider responses do not supply the exact rollout token IDs, old log-probabilities, or `RolloutRevision` required for RL training.
 
 References: [MiniMax OpenAI-compatible API](https://platform.minimaxi.com/docs/api-reference/api-overview), [Tavily Search API](https://docs.tavily.com/documentation/api-reference/endpoint/search).

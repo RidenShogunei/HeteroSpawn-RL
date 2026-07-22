@@ -92,8 +92,8 @@ class TavilySearchService:
 
         try:
             parsed = _TavilyResponse.model_validate_json(response.content, strict=True)
-        except (ValueError, ValidationError) as exc:
-            raise SearchRequestError("Tavily returned an invalid response schema") from exc
+        except (ValueError, ValidationError):
+            raise SearchRequestError("Tavily returned an invalid response schema") from None
 
         return SearchResponse(
             request_id=request.request_id,
