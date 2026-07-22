@@ -12,3 +12,4 @@ All notable project changes are recorded here. Architecture-changing decisions a
 - MiniMax evaluation policy and Tavily search adapters with bounded retries.
 - API-first 0/1/4-Sub orchestration with structured repair and failure isolation.
 - Live MiniMax conformance mode, inline-thinking normalization, scoped smoke scoring, and bounded invalid-schema retry.
+- MiniMax Token Plan MCP search adapter, pinned stdio transport, and live Main/Sub search validation.

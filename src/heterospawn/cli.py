@@ -14,6 +14,7 @@ from heterospawn.domain.ids import EpisodeId, PolicyId, TaskId
 from heterospawn.orchestration.api_episode import ApiEpisodeOrchestrator
 from heterospawn.policies.minimax import MiniMaxConfig, MiniMaxEvaluationPolicy
 from heterospawn.search.base import SearchService
+from heterospawn.search.minimax_mcp import MiniMaxMcpConfig, MiniMaxMcpSearchService
 from heterospawn.search.mock import MockSearchService
 from heterospawn.search.tavily import TavilyConfig, TavilySearchService
 
@@ -40,7 +41,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run_parser.add_argument(
         "--search-backend",
-        choices=("mock", "tavily"),
+        choices=("mock", "tavily", "minimax-mcp"),
         default="mock",
         help="use deterministic local evidence or the live Tavily API",
     )
@@ -58,6 +59,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--allow-network",
         action="store_true",
         help="required acknowledgement that this command spends external API credits",
+    )
+    conformance_parser.add_argument(
+        "--search-backend",
+        choices=("mock", "tavily", "minimax-mcp"),
+        default="mock",
+        help="search backend used by the required Sub",
     )
     return parser
 
@@ -91,7 +98,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "run-api-conformance":
         if not args.allow_network:
             raise SystemExit("--allow-network is required for external API calls")
-        return asyncio.run(_run_api_conformance())
+        return asyncio.run(_run_api_conformance(args.search_backend))
     return 0
 
 
@@ -108,11 +115,7 @@ async def _run_api_task(
         raise SystemExit(f"task id not found: {task_id}")
 
     policy = MiniMaxEvaluationPolicy(PolicyId("shared-minimax"), MiniMaxConfig.from_environment())
-    search: SearchService
-    if search_backend == "tavily":
-        search = TavilySearchService(TavilyConfig.from_environment())
-    else:
-        search = MockSearchService()
+    search = _build_search(search_backend)
     trace = await ApiEpisodeOrchestrator(policy, search).run(
         task,
         EpisodeId(f"api-{task_id}"),
@@ -145,9 +148,9 @@ async def _run_api_task(
     return 0
 
 
-async def _run_api_conformance() -> int:
+async def _run_api_conformance(search_backend: str) -> int:
     policy = MiniMaxEvaluationPolicy(PolicyId("shared-minimax"), MiniMaxConfig.from_environment())
-    trace = await ApiEpisodeOrchestrator(policy, MockSearchService()).run(
+    trace = await ApiEpisodeOrchestrator(policy, _build_search(search_backend)).run(
         BenchmarkTask(
             task_id=TaskId("api-conformance-1"),
             prompt=(
@@ -163,7 +166,7 @@ async def _run_api_conformance() -> int:
         "episode_id": trace.episode_id,
         "model_provider": policy.revision.provider,
         "model": policy.revision.model,
-        "search_backend": "mock",
+        "search_backend": search_backend,
         "spawn_count": trace.spawn_count,
         "sub_statuses": [result.status for result in trace.sub_results],
         "main_attempts": len(trace.main_attempts),
@@ -175,6 +178,14 @@ async def _run_api_conformance() -> int:
     if trace.spawn_count != 1 or [result.status for result in trace.sub_results] != ["success"]:
         raise SystemExit("live conformance episode did not complete the required one-Sub path")
     return 0
+
+
+def _build_search(search_backend: str) -> SearchService:
+    if search_backend == "tavily":
+        return TavilySearchService(TavilyConfig.from_environment())
+    if search_backend == "minimax-mcp":
+        return MiniMaxMcpSearchService(MiniMaxMcpConfig.from_environment())
+    return MockSearchService()
 
 
 if __name__ == "__main__":
