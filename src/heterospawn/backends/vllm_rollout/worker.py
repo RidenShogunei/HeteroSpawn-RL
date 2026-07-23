@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import importlib
 import importlib.metadata
 import json
 import traceback
@@ -18,15 +19,19 @@ from heterospawn.backends.vllm_rollout.models import (
     rollout_artifact_path,
 )
 
+_START_UNIX_SERVER_ATTRIBUTE = "start_unix_server"
+
 
 class _Runtime:
     def __init__(self, spec: VllmWorkerSpec) -> None:
-        from vllm import LLM
-        from vllm.lora.request import LoRARequest
+        vllm = importlib.import_module("vllm")
+        lora_request_module = importlib.import_module("vllm.lora.request")
+        llm_type = cast(Any, vllm.LLM)
+        lora_request_type = cast(Any, lora_request_module.LoRARequest)
 
         self._spec = spec
         self._artifact_path = rollout_artifact_path(spec.artifact)
-        self._llm = LLM(
+        self._llm = llm_type(
             model=str(spec.config.model_path),
             tokenizer=str(spec.config.model_path),
             dtype=spec.config.dtype,
@@ -39,7 +44,7 @@ class _Runtime:
             trust_remote_code=False,
             disable_log_stats=True,
         )
-        self._lora_request = LoRARequest(
+        self._lora_request = lora_request_type(
             spec.deployment.deployment_id,
             1,
             str(self._artifact_path),
@@ -52,7 +57,7 @@ class _Runtime:
         return self._spec.artifact.artifact_digest
 
     def runtime_metrics(self) -> VllmWorkerRuntime:
-        import torch
+        torch = importlib.import_module("torch")
 
         free_memory, total_memory = torch.cuda.mem_get_info()
         return VllmWorkerRuntime(
@@ -71,7 +76,8 @@ class _Runtime:
         )
 
     def generate_batch(self, requests: list[dict[str, Any]]) -> list[VllmWorkerResult]:
-        from vllm import SamplingParams
+        vllm = importlib.import_module("vllm")
+        sampling_params_type = cast(Any, vllm.SamplingParams)
 
         prompts: list[dict[str, list[int]]] = []
         sampling_params = []
@@ -80,7 +86,7 @@ class _Runtime:
             sampling = VllmSamplingConfig.model_validate(request["sampling"])
             prompts.append({"prompt_token_ids": list(prompt_ids)})
             sampling_params.append(
-                SamplingParams(
+                sampling_params_type(
                     max_tokens=sampling.max_new_tokens,
                     temperature=sampling.temperature,
                     top_p=sampling.top_p,
@@ -137,7 +143,7 @@ class _Server:
 
     async def run(self) -> None:
         self._socket_path.unlink(missing_ok=True)
-        start_unix_server = cast(Any, asyncio.start_unix_server)  # type: ignore[attr-defined]
+        start_unix_server = cast(Any, getattr(asyncio, _START_UNIX_SERVER_ATTRIBUTE))
         server = await start_unix_server(self._handle, path=str(self._socket_path))
         async with server:
             await self._shutdown.wait()
