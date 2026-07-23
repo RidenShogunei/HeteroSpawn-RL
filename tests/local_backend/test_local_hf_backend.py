@@ -22,6 +22,8 @@ if os.environ.get("HETEROSPAWN_RUN_LOCAL_BACKEND_TESTS") != "1":
     )
 
 transformers = importlib.import_module("transformers")
+torch = importlib.import_module("torch")
+safetensors_torch = importlib.import_module("safetensors.torch")
 
 pytestmark = pytest.mark.local_backend
 
@@ -49,7 +51,11 @@ class TinyTokenizer:
         return [1, 5, 6]
 
 
-def _backend(tmp_path: Path) -> LocalHfLoraBackend:
+def _backend(
+    tmp_path: Path,
+    *,
+    dtype: str = "float32",
+) -> LocalHfLoraBackend:
     model_config = transformers.Qwen2Config(
         vocab_size=64,
         hidden_size=32,
@@ -63,15 +69,17 @@ def _backend(tmp_path: Path) -> LocalHfLoraBackend:
         pad_token_id=0,
     )
     model = transformers.Qwen2ForCausalLM(model_config)
+    if dtype == "float16":
+        model = model.half()
     return LocalHfLoraBackend(
         config=LocalLoraConfig(
             model_id="tiny-random-qwen2",
             model_revision="fixture-v1",
             device="cpu",
-            dtype="float32",
+            dtype=dtype,
             max_sequence_length=64,
             max_new_tokens=3,
-            artifact_dir=tmp_path / "checkpoints",
+            artifact_dir=tmp_path / f"{dtype}-checkpoints",
         ),
         model=model,
         tokenizer=TinyTokenizer(),
@@ -215,3 +223,18 @@ async def test_export_rollout_artifact_is_exact_and_idempotent(tmp_path: Path) -
     (artifact_path / "adapter_model.safetensors").write_bytes(b"corrupted")
     with pytest.raises(CheckpointIntegrityError, match="differs from its training checkpoint"):
         await backend.export_rollout_artifact(main, version)
+
+
+@pytest.mark.asyncio
+async def test_all_lora_adapters_remain_float32_with_fp16_base(tmp_path: Path) -> None:
+    backend = _backend(tmp_path, dtype="float16")
+
+    for policy_id in (PolicyId("main"), PolicyId("sub")):
+        version = backend.rollout_revision(policy_id).weight_version
+        artifact = await backend.export_rollout_artifact(policy_id, version)
+        tensors = safetensors_torch.load_file(
+            str(rollout_artifact_path(artifact) / "adapter_model.safetensors")
+        )
+        assert tensors
+        assert {tensor.dtype for tensor in tensors.values()} == {torch.float32}
+        assert all(torch.isfinite(tensor).all() for tensor in tensors.values())

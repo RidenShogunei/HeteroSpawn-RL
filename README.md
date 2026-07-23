@@ -60,9 +60,16 @@ LoRA artifact. Synchronization stops the old worker, loads and hashes the replac
 publishes a new `RolloutRevision` only after verification; a failed replacement rebuilds the
 previous worker.
 
-The pinned compatibility stack is an optional rollout-only dependency. It does not own optimizer
-state, training batches, checkpoint recovery, or advantage semantics. See
-[the product validation record](docs/validation/2026-07-23-vllm-product-rollout-contract.md).
+The command also runs two complete trainable `Main → Sub → Main` rollouts in each alternating
+phase. It verifies task-level outcome normalization, episode-balanced batches, Main-first fresh
+rollouts, independent Main/Sub updates, and exact raw-trajectory-to-training-sample round-trip.
+The smoke uses constrained decoding and a synthetic non-scientific reward only to make this path
+deterministic; benchmark training must provide its own versioned reward and sampling configuration.
+
+The pinned compatibility stack remains an optional rollout-only dependency. It does not own
+optimizer state, training batches, checkpoint recovery, or advantage semantics. See the
+[rollout product validation](docs/validation/2026-07-23-vllm-product-rollout-contract.md) and
+[trainable-cycle validation](docs/validation/2026-07-23-trainable-episode-cycle.md).
 
 ### Remote backend capability spikes
 
@@ -75,6 +82,6 @@ The first runnable slice is documented in [docs/benchmarks/xbench-deepsearch.md]
 ## Current status
 
 Architecture Baseline v0.2, the API-first benchmark slice, and the Milestone 2 CPU training
-contracts are complete. Exact-token LocalHF training and optional restart-synchronized vLLM
-rollout are validated reference paths; API-backed episodes continue to be explicitly
-non-trainable.
+contracts are complete. The first complete trainable Main/Sub episode cycle now runs through
+exact-token LocalHF training and optional restart-synchronized vLLM rollout; API-backed episodes
+continue to be explicitly non-trainable.

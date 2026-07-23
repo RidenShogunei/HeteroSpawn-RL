@@ -21,6 +21,7 @@ from heterospawn.backends.vllm_rollout.models import (
     rollout_artifact_path,
 )
 from heterospawn.backends.vllm_rollout.process import _worker_environment
+from heterospawn.backends.vllm_rollout.service import _sampling_config
 from heterospawn.backends.vllm_rollout.worker import _selected_log_probs
 from heterospawn.domain.ids import AgentInstanceId, EpisodeId, PolicyId, RolloutId, TaskId
 from heterospawn.domain.training import GenerationRequest, RolloutArtifact
@@ -392,3 +393,19 @@ def test_worker_protocol_extracts_selected_logprobs_and_filters_credentials() ->
     assert environment["HOME"] == str(isolated_home)
     assert "HF_TOKEN" not in environment
     assert "MINIMAX_API_KEY" not in environment
+
+
+def test_sampling_config_accepts_auditable_guided_regex(tmp_path: Path) -> None:
+    request = _request().model_copy(
+        update={
+            "sampling_params": (
+                ("max_new_tokens", 8),
+                ("do_sample", False),
+                ("guided_regex", r'\{"kind":"answer","answer":"Paris"\}'),
+            )
+        }
+    )
+
+    sampling = _sampling_config(request, _config(tmp_path))
+
+    assert sampling.guided_regex == r'\{"kind":"answer","answer":"Paris"\}'

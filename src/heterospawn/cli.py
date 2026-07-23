@@ -241,7 +241,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     model_path=args.model_path,
                     artifact_dir=args.artifact_dir,
                     max_sequence_length=512,
-                    max_new_tokens=16,
+                    max_new_tokens=32,
                 ),
                 vllm_python=args.vllm_python,
                 main_rollout_device=args.main_rollout_device,

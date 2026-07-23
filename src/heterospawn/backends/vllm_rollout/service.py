@@ -367,7 +367,15 @@ def _sampling_config(
     config: VllmRolloutConfig,
 ) -> VllmSamplingConfig:
     params = dict(request.sampling_params)
-    allowed = {"max_new_tokens", "do_sample", "temperature", "top_p", "top_k", "seed"}
+    allowed = {
+        "max_new_tokens",
+        "do_sample",
+        "temperature",
+        "top_p",
+        "top_k",
+        "seed",
+        "guided_regex",
+    }
     unknown = set(params) - allowed
     if unknown:
         raise TrainingBatchError(f"unsupported vLLM sampling parameters: {sorted(unknown)}")
@@ -386,6 +394,10 @@ def _sampling_config(
     top_k = _as_int(params.get("top_k", -1), name="top_k")
     seed_value = params.get("seed")
     seed = None if seed_value is None else _as_int(seed_value, name="seed")
+    guided_regex_value = params.get("guided_regex")
+    guided_regex = (
+        None if guided_regex_value is None else _as_str(guided_regex_value, name="guided_regex")
+    )
     try:
         return VllmSamplingConfig(
             max_new_tokens=max_new_tokens,
@@ -393,6 +405,7 @@ def _sampling_config(
             top_p=top_p,
             top_k=top_k,
             seed=seed,
+            guided_regex=guided_regex,
         )
     except ValueError as error:
         raise TrainingBatchError("invalid vLLM sampling parameters") from error
@@ -448,4 +461,10 @@ def _as_float(value: object, *, name: str) -> float:
 def _as_bool(value: object, *, name: str) -> bool:
     if not isinstance(value, bool):
         raise TrainingBatchError(f"{name} must be a boolean")
+    return value
+
+
+def _as_str(value: object, *, name: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise TrainingBatchError(f"{name} must be a non-empty string")
     return value

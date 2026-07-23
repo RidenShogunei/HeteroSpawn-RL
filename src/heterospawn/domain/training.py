@@ -54,6 +54,16 @@ class GenerationRequest(BaseModel):
     sampling_params: tuple[tuple[str, JsonScalar], ...] = ()
 
 
+class PromptEncoding(BaseModel):
+    """One policy-ready prompt plus the exact tokenizer/template identity used."""
+
+    model_config = ConfigDict(frozen=True, strict=True)
+
+    prompt_ids: tuple[int, ...] = Field(min_length=1)
+    tokenizer_revision: str = Field(min_length=1)
+    prompt_template_revision: str = Field(min_length=1)
+
+
 class GenerationResult(BaseModel):
     """Exact output returned by the policy that performed sampling."""
 
