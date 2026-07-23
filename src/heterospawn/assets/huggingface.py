@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib
 import os
 import uuid
 from pathlib import Path, PurePosixPath
@@ -133,7 +134,8 @@ class HuggingFaceHubDownloader:
         destination: Path,
     ) -> Path:
         try:
-            from huggingface_hub import hf_hub_download  # type: ignore[import-untyped]
+            huggingface_hub = importlib.import_module("huggingface_hub")
+            hf_hub_download = huggingface_hub.hf_hub_download
 
             try:
                 path = hf_hub_download(
