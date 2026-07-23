@@ -93,6 +93,12 @@ the pinned upstream retrieval server, then runs:
 
 ```bash
 heterospawn wideseek-check-environment
+heterospawn wideseek-rollout-smoke
+heterospawn wideseek-train-smoke \
+  --topology shared \
+  --model-path /absolute/path/to/Qwen2.5-0.5B-Instruct \
+  --max-sequence-length 4096 \
+  --max-new-tokens 512
 ```
 
 See the [offline deployment runbook](docs/runbooks/wideseek-offline-environment.md) before
@@ -111,7 +117,8 @@ The first runnable slice is documented in [docs/benchmarks/xbench-deepsearch.md]
 Architecture Baseline v0.3 adopts WideSeek-R1 as the primary RL environment while retaining the
 project-owned exact-token LocalHF training and optional restart-synchronized vLLM rollout paths.
 The provider-neutral task boundary, bounded multi-round Main/Sub loop, pinned training-data
-loader, semantic evaluator, and role-specific reward contracts are in place. The next delivery
-slice connects the complete offline Wiki-2018/Qdrant/E5 Search/Access environment to real short
-shared-policy and independent-policy training cycles. xbench remains a held-out generalized
-evaluation path rather than the source of new training tasks.
+loader, semantic evaluator, role-specific reward contracts, offline Search/Access client, shared
+joint update, independent fresh alternating update, and crash-safe recovery are wired into one
+CLI-driven training cycle. Controlled single-GPU validation passes with the pinned 0.5B model;
+the complete 156 GB environment remains an opt-in remote acceptance run. xbench is held-out
+generalization evaluation and no longer has a dedicated training reward path.

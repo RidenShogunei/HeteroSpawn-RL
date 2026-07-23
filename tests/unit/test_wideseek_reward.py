@@ -201,3 +201,6 @@ async def test_reward_breakdown_exposes_shared_main_and_system_sub_totals(
     assert breakdown.role_totals.main == pytest.approx(1.06)
     assert breakdown.role_totals.sub == pytest.approx(1.0)
     assert await service.score(task, trace) == pytest.approx(1.06)
+    assert await service.score_for_phase(task, trace, "joint_update") == pytest.approx(1.3)
+    assert await service.score_for_phase(task, trace, "main_update") == pytest.approx(1.06)
+    assert await service.score_for_phase(task, trace, "sub_update") == pytest.approx(1.0)

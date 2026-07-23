@@ -35,6 +35,7 @@ class SemanticJudgeRevision(BaseModel):
     )
     sampling_params: tuple[tuple[str, None | bool | int | float | str], ...]
     max_format_attempts: int = Field(ge=1)
+    max_provider_requests: int = Field(default=128, ge=1)
     comparable_to_official: Literal[False] = False
 
 
@@ -156,14 +157,21 @@ class MiniMaxSemanticJudge:
         cache: SemanticJudgeCache | None = None,
         max_concurrency: int = 4,
         max_format_attempts: int = 2,
+        max_provider_requests: int = 128,
     ) -> None:
         if max_concurrency < 1:
             raise ValueError("semantic Judge max_concurrency must be positive")
         if max_format_attempts < 1:
             raise ValueError("semantic Judge max_format_attempts must be positive")
+        if max_provider_requests < 1:
+            raise ValueError("semantic Judge request budget must be positive")
         self._chat = chat
         self._cache = cache or SemanticJudgeCache()
         self._semaphore = asyncio.Semaphore(max_concurrency)
+        self._budget_lock = asyncio.Lock()
+        self._cache_key_locks_lock = asyncio.Lock()
+        self._cache_key_locks: dict[str, asyncio.Lock] = {}
+        self._provider_requests = 0
         self._revision = SemanticJudgeRevision(
             mode="minimax-development",
             provider=chat.revision.provider,
@@ -171,11 +179,16 @@ class MiniMaxSemanticJudge:
             prompt_revision=SEMANTIC_PROMPT_REVISION,
             sampling_params=self._SAMPLING,
             max_format_attempts=max_format_attempts,
+            max_provider_requests=max_provider_requests,
         )
 
     @property
     def revision(self) -> SemanticJudgeRevision:
         return self._revision
+
+    @property
+    def provider_requests(self) -> int:
+        return self._provider_requests
 
     async def judge(self, request: SemanticJudgeRequest) -> SemanticJudgeResult:
         cache_key = canonical_digest(
@@ -189,15 +202,21 @@ class MiniMaxSemanticJudge:
         )
         cached = self._cache.get(cache_key)
         if cached is not None:
-            return SemanticJudgeResult(
-                request_id=request.request_id,
-                scores=cached[0],
-                cache_key=cache_key,
-                cache_hit=True,
-                provider_response_digest=cached[1],
-                usage=TokenUsage(prompt_tokens=0, completion_tokens=0, total_tokens=0),
-            )
+            return _cached_result(request.request_id, cache_key, cached)
 
+        async with self._cache_key_locks_lock:
+            cache_key_lock = self._cache_key_locks.setdefault(cache_key, asyncio.Lock())
+        async with cache_key_lock:
+            cached = self._cache.get(cache_key)
+            if cached is not None:
+                return _cached_result(request.request_id, cache_key, cached)
+            return await self._judge_uncached(request, cache_key)
+
+    async def _judge_uncached(
+        self,
+        request: SemanticJudgeRequest,
+        cache_key: str,
+    ) -> SemanticJudgeResult:
         pairs = [
             {"idx": index, "candidate": candidate, "reference": reference}
             for index, (candidate, reference) in enumerate(
@@ -223,6 +242,10 @@ class MiniMaxSemanticJudge:
         response_digest = ""
         async with self._semaphore:
             for attempt in range(self._revision.max_format_attempts):
+                async with self._budget_lock:
+                    if self._provider_requests >= self._revision.max_provider_requests:
+                        raise JudgeRequestError("semantic Judge provider request budget exhausted")
+                    self._provider_requests += 1
                 try:
                     result = await self._chat.complete(
                         MiniMaxChatRequest(
@@ -263,6 +286,21 @@ class MiniMaxSemanticJudge:
                     ),
                 )
         raise JudgeRequestError("semantic Judge returned invalid output after bounded repairs")
+
+
+def _cached_result(
+    request_id: str,
+    cache_key: str,
+    cached: tuple[tuple[Literal[0, 1], ...], str],
+) -> SemanticJudgeResult:
+    return SemanticJudgeResult(
+        request_id=request_id,
+        scores=cached[0],
+        cache_key=cache_key,
+        cache_hit=True,
+        provider_response_digest=cached[1],
+        usage=TokenUsage(prompt_tokens=0, completion_tokens=0, total_tokens=0),
+    )
 
 
 def _parse_scores(

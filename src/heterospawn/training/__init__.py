@@ -14,6 +14,7 @@ from heterospawn.training.coordinator import (
 from heterospawn.training.episode_cycle import (
     EpisodeReward,
     OutcomeRewardService,
+    PhaseOutcomeRewardService,
     PhaseRolloutResult,
     RewardComposer,
     RewardConfig,
@@ -50,6 +51,7 @@ __all__ = [
     "OutcomeAdvantageGroup",
     "OutcomeRewardService",
     "PhaseCommitManifest",
+    "PhaseOutcomeRewardService",
     "PhasePendingUpdate",
     "PhaseRecoveryManifest",
     "PhaseRolloutResult",

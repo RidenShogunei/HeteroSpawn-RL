@@ -243,6 +243,102 @@ def build_parser() -> argparse.ArgumentParser:
         default="Red Bull",
         help="readiness query; text is never included in the report",
     )
+    wideseek_rollout = subparsers.add_parser(
+        "wideseek-rollout-smoke",
+        help="run one deterministic real Search-to-Access WideSeek episode",
+    )
+    wideseek_rollout.add_argument(
+        "--service-url",
+        default="http://127.0.0.1:8000",
+    )
+    wideseek_rollout.add_argument(
+        "--qdrant-url",
+        default="http://127.0.0.1:6333",
+    )
+    wideseek_rollout.add_argument(
+        "--report",
+        type=Path,
+        default=Path("artifacts/wideseek-rollout-smoke/report.json"),
+    )
+    wideseek_train = subparsers.add_parser(
+        "wideseek-train-smoke",
+        help="run one short real-model WideSeek LoRA training cycle",
+    )
+    wideseek_train.add_argument(
+        "--topology",
+        choices=("shared", "independent"),
+        default="independent",
+    )
+    wideseek_train.add_argument(
+        "--split",
+        choices=("width_20k", "depth_20k", "hybrid_20k"),
+        default="hybrid_20k",
+    )
+    wideseek_train.add_argument(
+        "--task-index",
+        action="append",
+        type=int,
+        dest="task_indices",
+        help="zero-based task index; repeat for multiple tasks (default: 0)",
+    )
+    wideseek_train.add_argument("--rollouts-per-task", type=int, default=2)
+    wideseek_train.add_argument(
+        "--data-manifest",
+        type=Path,
+        default=Path("manifests/wideseek-train-data.json"),
+    )
+    wideseek_train.add_argument(
+        "--data-dir",
+        type=Path,
+        default=Path("artifacts/wideseek-assets/train-data"),
+    )
+    wideseek_train.add_argument(
+        "--service-url",
+        default="http://127.0.0.1:8000",
+    )
+    wideseek_train.add_argument(
+        "--qdrant-url",
+        default="http://127.0.0.1:6333",
+    )
+    wideseek_train.add_argument("--device", default="cuda:0")
+    wideseek_train.add_argument("--model-path", type=Path)
+    wideseek_train.add_argument(
+        "--allow-model-download",
+        action="store_true",
+        help="required acknowledgement when no verified local model path is supplied",
+    )
+    wideseek_train.add_argument("--max-sequence-length", type=int, default=4096)
+    wideseek_train.add_argument("--max-new-tokens", type=int, default=512)
+    wideseek_train.add_argument(
+        "--judge",
+        choices=("none", "minimax-development"),
+        default="none",
+    )
+    wideseek_train.add_argument(
+        "--allow-network",
+        action="store_true",
+        help="required acknowledgement for MiniMax development Judge calls",
+    )
+    wideseek_train.add_argument(
+        "--require-sub-update",
+        action="store_true",
+        help="fail instead of accepting an all-zero-spawn independent Sub phase",
+    )
+    wideseek_train.add_argument(
+        "--artifact-dir",
+        type=Path,
+        default=Path("artifacts/wideseek-train-smoke/checkpoints"),
+    )
+    wideseek_train.add_argument(
+        "--transaction-dir",
+        type=Path,
+        default=Path("artifacts/wideseek-train-smoke/transactions"),
+    )
+    wideseek_train.add_argument(
+        "--report",
+        type=Path,
+        default=Path("artifacts/wideseek-train-smoke/report.json"),
+    )
     return parser
 
 
@@ -403,6 +499,51 @@ def main(argv: Sequence[str] | None = None) -> int:
                 sort_keys=True,
             )
         )
+        return 0
+    if args.command == "wideseek-rollout-smoke":
+        from heterospawn.training.wideseek_smoke import run_wideseek_rollout_smoke
+
+        report = asyncio.run(
+            run_wideseek_rollout_smoke(
+                service_url=args.service_url,
+                qdrant_url=args.qdrant_url,
+                report_path=args.report,
+            )
+        )
+        print(json.dumps(report, ensure_ascii=False, sort_keys=True))
+        return 0
+    if args.command == "wideseek-train-smoke":
+        if args.model_path is None and not args.allow_model_download:
+            raise SystemExit("--allow-model-download is required when --model-path is omitted")
+        if args.judge == "minimax-development" and not args.allow_network:
+            raise SystemExit("--allow-network is required for MiniMax development Judge calls")
+        from heterospawn.backends.local_hf.config import LocalLoraConfig
+        from heterospawn.training.wideseek_smoke import run_wideseek_train_smoke
+
+        report = asyncio.run(
+            run_wideseek_train_smoke(
+                topology=args.topology,
+                split=args.split,
+                task_indices=tuple(args.task_indices or (0,)),
+                rollouts_per_task=args.rollouts_per_task,
+                data_manifest_path=args.data_manifest,
+                data_dir=args.data_dir,
+                service_url=args.service_url,
+                qdrant_url=args.qdrant_url,
+                local_config=LocalLoraConfig(
+                    device=args.device,
+                    model_path=args.model_path,
+                    artifact_dir=args.artifact_dir,
+                    max_sequence_length=args.max_sequence_length,
+                    max_new_tokens=args.max_new_tokens,
+                ),
+                judge_mode=args.judge,
+                transaction_dir=args.transaction_dir,
+                report_path=args.report,
+                require_sub_update=args.require_sub_update,
+            )
+        )
+        print(json.dumps(report, ensure_ascii=False, sort_keys=True))
         return 0
     return 0
 

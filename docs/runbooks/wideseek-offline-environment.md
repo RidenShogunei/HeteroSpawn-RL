@@ -90,7 +90,58 @@ digest mismatch as a hard failure. Logs may contain retrieved text and therefore
 
 ## Handoff to training
 
-Pass `http://127.0.0.1:8000` to `WideSeekLocalToolService`. Persist its provider revision in every
-Search/Access outcome and bind the same corpus, retriever, collection, prompt, tool, Judge, and
-reward revisions into the phase transaction. Never resume a phase when the environment identity
-differs.
+First prove one real Search-to-Access loop. The report contains only counts, revisions, and
+provenance checks; the trace and retrieved text stay below ignored `artifacts/`:
+
+```bash
+heterospawn wideseek-rollout-smoke \
+  --service-url http://127.0.0.1:8000 \
+  --qdrant-url http://127.0.0.1:6333 \
+  --report artifacts/wideseek-rollout-smoke/report.json
+```
+
+Then run both short training topologies from separate transaction directories. Reusing a
+transaction directory with different inputs is intentionally rejected:
+
+```bash
+heterospawn wideseek-train-smoke \
+  --topology shared \
+  --split width_20k \
+  --task-index 0 \
+  --rollouts-per-task 2 \
+  --model-path "$HOME/heterospawn-runtime/models/Qwen2.5-0.5B-Instruct" \
+  --device cuda:0 \
+  --max-sequence-length 4096 \
+  --max-new-tokens 512 \
+  --artifact-dir "$HOME/heterospawn-runtime/results/shared/checkpoints" \
+  --transaction-dir "$HOME/heterospawn-runtime/results/shared/transactions" \
+  --report "$HOME/heterospawn-runtime/results/shared/report.json"
+
+heterospawn wideseek-train-smoke \
+  --topology independent \
+  --split depth_20k \
+  --task-index 0 \
+  --rollouts-per-task 2 \
+  --model-path "$HOME/heterospawn-runtime/models/Qwen2.5-0.5B-Instruct" \
+  --device cuda:0 \
+  --max-sequence-length 4096 \
+  --max-new-tokens 512 \
+  --artifact-dir "$HOME/heterospawn-runtime/results/independent/checkpoints" \
+  --transaction-dir "$HOME/heterospawn-runtime/results/independent/transactions" \
+  --report "$HOME/heterospawn-runtime/results/independent/report.json"
+```
+
+Use `--require-sub-update` only when the selected acceptance task must demonstrate a non-empty Sub
+batch. A genuine 0-spawn group remains valid: it contributes to the Sub reward baseline, produces
+no Sub sample, and does not advance the Sub optimizer or rollout revision. A zero-variance reward
+group records a degenerate-group metric and a zero advantage; do not misreport its optimizer
+transaction as evidence of reward improvement.
+
+For the optional non-official development Judge, export the MiniMax credential only in the process
+environment and add `--judge minimax-development --allow-network`. The implementation caps
+provider requests at 128, caches exact-revision verdicts, and fails the phase if the final Judge
+attempt fails. Never put the credential in a command, report, trace, or Git file.
+
+Every Search/Access outcome persists the provider revision. The phase transaction binds the same
+dataset, corpus, retriever, collection, prompt, tool, Judge, and reward revisions. Never resume a
+phase when the environment identity differs.

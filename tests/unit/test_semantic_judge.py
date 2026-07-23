@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 
 import pytest
@@ -38,6 +39,25 @@ class _Chat:
             finish_reason="stop",
             usage=TokenUsage(prompt_tokens=2, completion_tokens=1, total_tokens=3),
             raw_response_digest=f"digest-{len(self.requests)}",
+        )
+
+
+class _BlockingChat(_Chat):
+    def __init__(self) -> None:
+        super().__init__([json.dumps({"scores": [1, 0]})])
+        self.started = asyncio.Event()
+        self.release = asyncio.Event()
+
+    async def complete(self, request: MiniMaxChatRequest) -> MiniMaxChatResult:
+        self.requests.append(request)
+        self.started.set()
+        await self.release.wait()
+        return MiniMaxChatResult(
+            provider_request_id="request-1",
+            content=self._responses.pop(0),
+            finish_reason="stop",
+            usage=TokenUsage(prompt_tokens=2, completion_tokens=1, total_tokens=3),
+            raw_response_digest="digest-1",
         )
 
 
@@ -82,6 +102,51 @@ async def test_invalid_judge_schema_repairs_once_then_fails_phase() -> None:
     with pytest.raises(JudgeRequestError, match="invalid output"):
         await judge.judge(_request("bad"))
     assert len(chat.requests) == 2
+
+
+@pytest.mark.asyncio
+async def test_provider_request_budget_is_hard_and_cache_hits_are_free() -> None:
+    chat = _Chat(
+        [
+            json.dumps({"scores": [1, 0]}),
+            json.dumps({"scores": [0, 1]}),
+        ]
+    )
+    judge = MiniMaxSemanticJudge(  # type: ignore[arg-type]
+        chat,
+        max_provider_requests=1,
+    )
+
+    await judge.judge(_request("first"))
+    cached = await judge.judge(_request("cached"))
+    changed = _request("changed").model_copy(update={"question": "another question"})
+    with pytest.raises(JudgeRequestError, match="budget exhausted"):
+        await judge.judge(changed)
+
+    assert cached.cache_hit is True
+    assert judge.provider_requests == 1
+    assert len(chat.requests) == 1
+
+
+@pytest.mark.asyncio
+async def test_identical_concurrent_requests_use_one_provider_request() -> None:
+    chat = _BlockingChat()
+    judge = MiniMaxSemanticJudge(chat, cache=SemanticJudgeCache())  # type: ignore[arg-type]
+
+    first_task = asyncio.create_task(judge.judge(_request("first")))
+    await chat.started.wait()
+    second_task = asyncio.create_task(judge.judge(_request("second")))
+    await asyncio.sleep(0)
+
+    assert len(chat.requests) == 1
+    chat.release.set()
+    first, second = await asyncio.gather(first_task, second_task)
+
+    assert first.cache_hit is False
+    assert second.cache_hit is True
+    assert first.scores == second.scores
+    assert judge.provider_requests == 1
+    assert len(chat.requests) == 1
 
 
 def test_cache_rejects_conflicting_digest_identity() -> None:

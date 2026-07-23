@@ -96,24 +96,6 @@ class JudgedRepeatScoreReport(BaseModel):
     judge_response_digests: tuple[str, ...]
 
 
-class XBenchTrainingOutcome(BaseModel):
-    """Safe per-episode training verdict; evaluator plaintext never crosses this boundary."""
-
-    model_config = ConfigDict(frozen=True, strict=True)
-
-    task_id: TaskId
-    correct: bool
-    resolution: Literal["direct_exact", "exact_miss", "development_judge"]
-    dataset_revision: str
-    judge_revision_digest: str | None = None
-    judge_response_digest: str | None = None
-    judge_prompt_tokens: int = Field(default=0, ge=0)
-    judge_completion_tokens: int = Field(default=0, ge=0)
-    judge_total_tokens: int = Field(default=0, ge=0)
-    judge_latency_ms: int = Field(default=0, ge=0)
-    comparable_to_official: Literal[False] = False
-
-
 @dataclass(frozen=True, repr=False)
 class _EvaluatorRecord:
     task: BenchmarkTask
@@ -184,68 +166,6 @@ class XBenchDataset:
             correct=correct,
             total=total,
             accuracy=(correct / total) if total else 0.0,
-        )
-
-    async def evaluate_training_outcome(
-        self,
-        task: BenchmarkTask,
-        response: str,
-        *,
-        judge: JudgeService | None = None,
-        request_id: str | None = None,
-    ) -> XBenchTrainingOutcome:
-        """Return a safe binary verdict while keeping reference data evaluator-only."""
-
-        record = self._record(task.task_id)
-        if record.task != task:
-            raise BenchmarkDataError("training reward task does not match the dataset record")
-        formatted_answer = parse_final_answer(response)
-        if formatted_answer is None:
-            # Trainable ANSWER actions already isolate the terminal answer from the
-            # surrounding model message, so they need not repeat xbench's text marker.
-            formatted_answer = response.strip()
-        if formatted_answer == record.answer:
-            return XBenchTrainingOutcome(
-                task_id=task.task_id,
-                correct=True,
-                resolution="direct_exact",
-                dataset_revision=XBENCH_UPSTREAM_REVISION,
-            )
-        if judge is None:
-            return XBenchTrainingOutcome(
-                task_id=task.task_id,
-                correct=False,
-                resolution="exact_miss",
-                dataset_revision=XBENCH_UPSTREAM_REVISION,
-            )
-        if judge.revision.comparable_to_official:
-            raise BenchmarkDataError("official-comparable Judges cannot be used for training")
-
-        from heterospawn.evaluation.judges import JudgeRequest
-
-        result = await judge.judge(
-            JudgeRequest(
-                request_id=request_id or f"{task.task_id}:training-reward",
-                task_id=task.task_id,
-                question=record.task.prompt,
-                correct_answer=record.answer,
-                response=response,
-            )
-        )
-        revision_digest = hashlib.sha256(
-            judge.revision.model_dump_json().encode("utf-8")
-        ).hexdigest()
-        return XBenchTrainingOutcome(
-            task_id=task.task_id,
-            correct=result.correct,
-            resolution="development_judge",
-            dataset_revision=XBENCH_UPSTREAM_REVISION,
-            judge_revision_digest=revision_digest,
-            judge_response_digest=result.provider_response_digest,
-            judge_prompt_tokens=result.usage.prompt_tokens,
-            judge_completion_tokens=result.usage.completion_tokens,
-            judge_total_tokens=result.usage.total_tokens,
-            judge_latency_ms=result.latency_ms,
         )
 
     def evaluate_repeat_exact(
@@ -400,12 +320,6 @@ class XBenchDataset:
             judge_latency_ms=judge_latency_ms,
             judge_response_digests=tuple(response_digests),
         )
-
-    def _record(self, task_id: TaskId) -> _EvaluatorRecord:
-        try:
-            return next(record for record in self._records if record.task.task_id == task_id)
-        except StopIteration:
-            raise BenchmarkDataError("training reward contains an unknown task id") from None
 
 
 def parse_final_answer(response: str) -> str | None:

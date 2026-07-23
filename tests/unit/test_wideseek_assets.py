@@ -174,3 +174,21 @@ def test_committed_offline_manifests_match_environment_identity() -> None:
     assert retriever.manifest_digest == WIDESEEK_E5_MANIFEST_DIGEST
     assert len(retriever.files) == 9
     assert sum(file.size for file in retriever.files) == 438_900_149
+
+
+def test_offline_launcher_uses_project_absolute_manifest_paths() -> None:
+    root = Path(__file__).parents[2]
+    launcher = (root / "scripts/start_wideseek_offline.sh").read_text(encoding="utf-8")
+
+    assert '--corpus-manifest "$project_root/manifests/wideseek-wiki-2018-corpus.json"' in launcher
+    assert '--retriever-manifest "$project_root/manifests/wideseek-e5-base-v2.json"' in launcher
+
+
+def test_offline_launcher_cleans_complete_service_process_groups() -> None:
+    root = Path(__file__).parents[2]
+    launcher = (root / "scripts/start_wideseek_offline.sh").read_text(encoding="utf-8")
+
+    assert "setsid env QDRANT__SERVICE__HTTP_PORT" in launcher
+    assert 'setsid python -u "$retrieval_server"' in launcher
+    assert 'kill -TERM -- "-$leader"' in launcher
+    assert 'kill -KILL -- "-$leader"' in launcher

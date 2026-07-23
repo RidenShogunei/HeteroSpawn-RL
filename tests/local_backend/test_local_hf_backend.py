@@ -12,7 +12,13 @@ from heterospawn.backends.local_hf import LocalHfLoraBackend, LocalLoraConfig
 from heterospawn.backends.vllm_rollout.models import rollout_artifact_path
 from heterospawn.domain.ids import AgentInstanceId, EpisodeId, PolicyId, RolloutId, StepId, TaskId
 from heterospawn.domain.training import GenerationRequest, TrajectoryStep
-from heterospawn.errors import CheckpointIntegrityError, RolloutRevisionMismatch
+from heterospawn.errors import (
+    CheckpointIntegrityError,
+    RolloutRevisionMismatch,
+    TrainingBatchError,
+)
+from heterospawn.policies.base import Message
+from heterospawn.policies.trainable import ToolDefinition
 from heterospawn.training import TrainingBatchBuilder
 
 if os.environ.get("HETEROSPAWN_RUN_LOCAL_BACKEND_TESTS") != "1":
@@ -46,8 +52,11 @@ class TinyTokenizer:
         *,
         tokenize: bool,
         add_generation_prompt: bool,
+        tools: list[dict[str, object]] | None = None,
     ) -> list[int]:
         assert tokenize and add_generation_prompt and messages
+        if tools is not None:
+            assert tools
         return [1, 5, 6]
 
 
@@ -173,6 +182,35 @@ async def test_exact_generate_update_sync_and_partner_isolation(tmp_path: Path) 
 
 
 @pytest.mark.asyncio
+async def test_generation_accepts_only_prompt_revisions_issued_for_tool_schema(
+    tmp_path: Path,
+) -> None:
+    backend = _backend(tmp_path)
+    main = PolicyId("main")
+    encoding = backend.prompt_encoder.encode(
+        (Message(role="user", content="use the tool"),),
+        (
+            ToolDefinition(
+                name="search",
+                description="Search the fixture.",
+                parameters_json='{"type":"object","properties":{}}',
+            ),
+        ),
+    )
+    request = _request(backend, role="main", request_id="tools").model_copy(
+        update={
+            "prompt_ids": encoding.prompt_ids,
+            "prompt_template_revision": encoding.prompt_template_revision,
+        }
+    )
+    await backend.endpoint(main).generate(request, backend.rollout_revision(main))
+
+    forged = request.model_copy(update={"prompt_template_revision": "unissued-revision"})
+    with pytest.raises(TrainingBatchError):
+        await backend.endpoint(main).generate(forged, backend.rollout_revision(main))
+
+
+@pytest.mark.asyncio
 async def test_four_sub_requests_share_endpoint_and_checkpoint_restores(tmp_path: Path) -> None:
     backend = _backend(tmp_path)
     sub = PolicyId("sub")
@@ -203,6 +241,35 @@ async def test_four_sub_requests_share_endpoint_and_checkpoint_restores(tmp_path
     assert restored == update.trained_version
     assert backend.adapter_hash(sub) == trained_hash
     assert update.checkpoint.optimizer_state_digest
+
+
+@pytest.mark.asyncio
+async def test_restart_restores_weights_under_a_new_deployment_identity(tmp_path: Path) -> None:
+    backend = _backend(tmp_path / "original")
+    main = PolicyId("main")
+    request = _request(backend, role="main", request_id="restart")
+    original_revision = backend.rollout_revision(main)
+    result = await backend.endpoint(main).generate(request, original_revision)
+    batch = TrainingBatchBuilder().build(
+        batch_id="restart-update-1",
+        phase="main_update",
+        target_policy_id=main,
+        expected_base_version=original_revision.weight_version,
+        steps=(_step(request, result, step_id="restart-step"),),
+        episode_advantages={request.episode_id: 1.0},
+    )
+    update = await backend.update_policy(main, batch, original_revision.weight_version)
+    committed_revision = await backend.sync_rollout_weights(main, update.trained_version)
+
+    replacement = _backend(tmp_path / "replacement")
+    await replacement.restore_checkpoint(update.checkpoint)
+    recovered_revision = await replacement.sync_rollout_weights(main, update.trained_version)
+
+    assert recovered_revision.weight_version == committed_revision.weight_version
+    assert recovered_revision.deployment_id != committed_revision.deployment_id
+    assert replacement.adapter_hash(main) == replacement.adapter_hash(main, rollout=True)
+    with pytest.raises(RolloutRevisionMismatch):
+        await replacement.endpoint(main).generate(request, committed_revision)
 
 
 @pytest.mark.asyncio

@@ -211,6 +211,10 @@ class WideSeekLocalToolService:
     def provider_revision(self) -> str:
         return self._config.identity.digest
 
+    @property
+    def identity(self) -> WideSeekEnvironmentIdentity:
+        return self._config.identity
+
     async def search(self, request: SearchRequest) -> SearchResponse:
         content = await self._post(
             "/retrieve",
