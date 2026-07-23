@@ -7,17 +7,37 @@ from heterospawn.training.batch import (
     normalize_outcome_advantages,
 )
 from heterospawn.training.coordinator import AlternatingCoordinator, CycleResult
+from heterospawn.training.episode_cycle import (
+    EpisodeReward,
+    OutcomeRewardService,
+    PhaseRolloutResult,
+    RewardComposer,
+    RewardConfig,
+    TaskRolloutGroup,
+    TrainableAlternatingCycleRunner,
+    TrainableCycleResult,
+    TrainableRolloutBatchFactory,
+)
 from heterospawn.training.mock import MockTrainingBackend
 from heterospawn.training.registry import PolicyRegistry
 
 __all__ = [
     "AlternatingCoordinator",
     "CycleResult",
+    "EpisodeReward",
     "MockTrainingBackend",
     "OutcomeAdvantageGroup",
+    "OutcomeRewardService",
+    "PhaseRolloutResult",
     "PolicyRegistry",
     "PolicyService",
+    "RewardComposer",
+    "RewardConfig",
     "RolloutArtifactProvider",
+    "TaskRolloutGroup",
+    "TrainableAlternatingCycleRunner",
+    "TrainableCycleResult",
+    "TrainableRolloutBatchFactory",
     "TrainingBackend",
     "TrainingBatchBuilder",
     "normalize_outcome_advantages",

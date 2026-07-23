@@ -7,7 +7,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from heterospawn.domain.training import canonical_digest
+from heterospawn.domain.training import PromptEncoding, canonical_digest
 from heterospawn.policies.base import Message
 
 DEFAULT_MODEL_ID = "Qwen/Qwen2.5-0.5B-Instruct"
@@ -35,16 +35,6 @@ class LocalLoraConfig(BaseModel):
     learning_rate: float = Field(default=1e-4, gt=0)
     artifact_dir: Path = Path("artifacts/local-contract/checkpoints")
     seed: int = 20260722
-
-
-class PromptEncoding(BaseModel):
-    """One-time tokenizer output retained as rollout input provenance."""
-
-    model_config = ConfigDict(frozen=True, strict=True)
-
-    prompt_ids: tuple[int, ...] = Field(min_length=1)
-    tokenizer_revision: str = Field(min_length=1)
-    prompt_template_revision: str = Field(min_length=1)
 
 
 class LocalPromptEncoder:
@@ -78,4 +68,15 @@ class LocalPromptEncoder:
             prompt_ids=tuple(int(token_id) for token_id in prompt_ids),
             tokenizer_revision=self.tokenizer_revision,
             prompt_template_revision=self.prompt_template_revision,
+        )
+
+    def decode(self, response_ids: tuple[int, ...]) -> str:
+        """Decode only for environment/action interpretation, never for training reconstruction."""
+
+        return str(
+            self._tokenizer.decode(
+                list(response_ids),
+                skip_special_tokens=True,
+                clean_up_tokenization_spaces=False,
+            )
         )

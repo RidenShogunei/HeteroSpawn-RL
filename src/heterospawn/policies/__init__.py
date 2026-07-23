@@ -16,6 +16,7 @@ from heterospawn.policies.minimax import (
     MiniMaxEvaluationPolicy,
 )
 from heterospawn.policies.mock import MockEvaluationPolicy
+from heterospawn.policies.trainable import TrainablePolicyCodec
 
 __all__ = [
     "DEFAULT_MINIMAX_BASE_URL",
@@ -30,4 +31,5 @@ __all__ = [
     "MockEvaluationPolicy",
     "PolicyCapabilities",
     "TokenUsage",
+    "TrainablePolicyCodec",
 ]

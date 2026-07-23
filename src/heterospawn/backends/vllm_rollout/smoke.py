@@ -17,6 +17,7 @@ from heterospawn.backends.vllm_rollout.models import (
     VllmRolloutConfig,
 )
 from heterospawn.backends.vllm_rollout.process import SubprocessVllmWorkerFactory
+from heterospawn.benchmarks.xbench import BenchmarkTask
 from heterospawn.domain.ids import (
     AgentInstanceId,
     EpisodeId,
@@ -26,10 +27,31 @@ from heterospawn.domain.ids import (
     TaskId,
 )
 from heterospawn.domain.training import GenerationRequest, GenerationResult, TrajectoryStep
-from heterospawn.domain.versions import RolloutRevision
+from heterospawn.domain.versions import RoleBinding, RolloutRevision
 from heterospawn.errors import ConfigurationError, RolloutRevisionMismatch
+from heterospawn.orchestration.trainable_episode import TrainableEpisodeOrchestrator
+from heterospawn.orchestration.trainable_models import TrainableEpisodeTrace
 from heterospawn.policies.base import Message
-from heterospawn.training import TrainingBatchBuilder
+from heterospawn.search.mock import MockSearchService
+from heterospawn.training import (
+    PhaseRolloutResult,
+    PolicyRegistry,
+    RewardComposer,
+    RewardConfig,
+    TrainableAlternatingCycleRunner,
+    TrainableCycleResult,
+    TrainingBatchBuilder,
+)
+
+
+class _ContractOutcomeReward:
+    """Non-scientific reward used only to exercise the optimizer contract."""
+
+    revision = "vllm-trainable-cycle-contract-v1"
+
+    async def score(self, task: BenchmarkTask, trace: TrainableEpisodeTrace) -> float:
+        del task
+        return 0.0 if str(trace.episode_id).endswith("episode-0") else 1.0
 
 
 async def run_vllm_rollout_contract_smoke(
@@ -192,11 +214,53 @@ async def _run_contract(
         sub_r0,
     )
     fresh_sub_result = await backend.endpoint(sub).generate(sub_requests[0], sub_r1)
+    restored = await backend.restore_checkpoint(sub_update.checkpoint)
+    cycle_base = {
+        "main": backend.rollout_revision(main),
+        "sub": backend.rollout_revision(sub),
+    }
+    cycle = await _run_trainable_episode_cycle(
+        backend=backend,
+        trainer=trainer,
+        main=main,
+        sub=sub,
+    )
+    cycle_main_phase, cycle_sub_phase = cycle.phases
+    cycle_checks = {
+        "trainable_cycle_main_updated": cycle.updates.main_update is not None,
+        "trainable_cycle_sub_updated": cycle.updates.sub_update is not None,
+        "trainable_cycle_two_rollouts_per_phase": all(
+            len(group.traces) == 2 for phase in cycle.phases for group in phase.groups
+        ),
+        "trainable_cycle_required_one_sub_path": all(
+            trace.status == "success" and trace.spawn_count == 1
+            for phase in cycle.phases
+            for group in phase.groups
+            for trace in group.traces
+        ),
+        "trainable_cycle_fresh_rollout_ids": {
+            trace.rollout_id for group in cycle_main_phase.groups for trace in group.traces
+        }.isdisjoint(
+            {trace.rollout_id for group in cycle_sub_phase.groups for trace in group.traces}
+        ),
+        "trainable_cycle_exact_batch_roundtrip": all(
+            _phase_batch_matches_raw_steps(phase) for phase in cycle.phases
+        ),
+        "trainable_cycle_episode_balanced": all(
+            _phase_is_episode_balanced(phase) for phase in cycle.phases
+        ),
+        "trainable_cycle_main_first_versions": dict(cycle_main_phase.policy_revisions)[main]
+        == cycle_base["main"],
+        "trainable_cycle_sub_phase_is_fresh": (
+            dict(cycle_sub_phase.policy_revisions)[main].weight_version.optimizer_step
+            == cycle_base["main"].weight_version.optimizer_step + 1
+            and dict(cycle_sub_phase.policy_revisions)[sub] == cycle_base["sub"]
+        ),
+    }
     runtime_metrics = {
         "main": (await backend.runtime_metrics(main)).model_dump(mode="json"),
         "sub": (await backend.runtime_metrics(sub)).model_dump(mode="json"),
     }
-    restored = await backend.restore_checkpoint(sub_update.checkpoint)
 
     checks = {
         "main_exact_token_logprob_alignment": _aligned(main_result),
@@ -217,14 +281,15 @@ async def _run_contract(
         "stale_sub_revision_rejected": stale_sub_rejected,
         "fresh_sub_exact_token_logprob_alignment": _aligned(fresh_sub_result),
         "checkpoint_restored": restored == sub_update.trained_version,
+        **cycle_checks,
     }
     if not all(checks.values()):
         failed = sorted(name for name, passed in checks.items() if not passed)
         raise RuntimeError(f"vLLM rollout contract smoke failed: {', '.join(failed)}")
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "status": "passed",
-        "rollout_only": True,
+        "rollout_only": False,
         "training_backend": "local_hf_lora",
         "rollout_backend": "vllm-0.7.0-v0-xformers",
         "model_id": local_config.model_id,
@@ -259,8 +324,111 @@ async def _run_contract(
                 "after": sub_r1.model_dump(mode="json"),
             },
         },
+        "trainable_episode_cycle": {
+            "reward_revision": _ContractOutcomeReward.revision,
+            "scientific_reward": False,
+            "rollouts_per_task": 2,
+            "phases": [
+                {
+                    "phase": phase.phase,
+                    "sample_count": len(phase.batch.samples),
+                    "degenerate_groups": phase.degenerate_groups,
+                    "trace_count": sum(len(group.traces) for group in phase.groups),
+                    "invalid_main_attempts": sum(
+                        trace.invalid_main_attempts
+                        for group in phase.groups
+                        for trace in group.traces
+                    ),
+                    "base_versions": {
+                        str(policy_id): revision.weight_version.model_dump(mode="json")
+                        for policy_id, revision in phase.policy_revisions
+                    },
+                }
+                for phase in cycle.phases
+            ],
+        },
         "checks": checks,
     }
+
+
+async def _run_trainable_episode_cycle(
+    *,
+    backend: VllmRolloutBackend,
+    trainer: LocalHfLoraBackend,
+    main: PolicyId,
+    sub: PolicyId,
+) -> TrainableCycleResult:
+    registry = PolicyRegistry(
+        (
+            RoleBinding(role="main", policy_id=main, trainable=True),
+            RoleBinding(role="sub", policy_id=sub, trainable=True),
+        ),
+        (
+            (main, backend.rollout_revision(main)),
+            (sub, backend.rollout_revision(sub)),
+        ),
+    )
+    orchestrator = TrainableEpisodeOrchestrator(
+        registry,
+        {"main": backend.endpoint(main), "sub": backend.endpoint(sub)},
+        {"main": trainer.prompt_encoder, "sub": trainer.prompt_encoder},
+        MockSearchService({"capital of France": "Paris is the capital of France."}),
+        max_concurrency=2,
+        max_spawn_per_episode=1,
+        repair_attempts=2,
+        sampling_params=(("max_new_tokens", 32), ("do_sample", False)),
+    )
+    return await TrainableAlternatingCycleRunner(
+        registry,
+        backend,
+        orchestrator,
+        RewardComposer(_ContractOutcomeReward(), RewardConfig()),
+        rollouts_per_task=2,
+    ).run_cycle(
+        cycle_id="vllm-trainable-cycle-1",
+        tasks=(
+            BenchmarkTask(
+                task_id=TaskId("vllm-trainable-cycle-task"),
+                prompt=(
+                    "This is a strict orchestration contract check. On the initial turn, "
+                    'return exactly {"kind":"spawn","subtasks":["capital of France"]}. '
+                    "After the Sub result arrives, return exactly one ANSWER JSON object."
+                ),
+            ),
+        ),
+    )
+
+
+def _phase_batch_matches_raw_steps(phase: PhaseRolloutResult) -> bool:
+    raw = {
+        step.step_id: step
+        for group in phase.groups
+        for trace in group.traces
+        for step in trace.model_steps
+    }
+    return all(
+        sample.source_step_id in raw
+        and sample.prompt_ids == raw[sample.source_step_id].prompt_ids
+        and sample.response_ids == raw[sample.source_step_id].response_ids
+        and sample.old_log_probs == raw[sample.source_step_id].response_log_probs
+        for sample in phase.batch.samples
+    )
+
+
+def _phase_is_episode_balanced(phase: PhaseRolloutResult) -> bool:
+    episode_ids = {sample.episode_id for sample in phase.batch.samples}
+    return all(
+        abs(
+            sum(
+                sample.aggregation_weight
+                for sample in phase.batch.samples
+                if sample.episode_id == episode_id
+            )
+            - 1.0
+        )
+        < 1e-12
+        for episode_id in episode_ids
+    )
 
 
 def torch_version() -> str:
