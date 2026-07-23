@@ -7,6 +7,7 @@ The project is deliberately staged:
 1. CPU-only domain contracts and mock orchestration.
 2. API-first benchmark validation with xbench-DeepSearch and MiniMax.
 3. Exact-token local-model rollout and independent Main/Sub training backends.
+4. A provider-neutral WideSeek-R1 training environment with multi-turn Search/Access.
 
 The authoritative architecture is [HeteroSpawn_DeepResearch_RL_Project_Design.md](HeteroSpawn_DeepResearch_RL_Project_Design.md). Significant decisions are recorded under `docs/adr/`; implementation work is linked to GitHub issues, milestones, commits, and pull requests.
 
@@ -81,9 +82,8 @@ The first runnable slice is documented in [docs/benchmarks/xbench-deepsearch.md]
 
 ## Current status
 
-Architecture Baseline v0.2, the API-first benchmark slice, and the Milestone 2 CPU training
-contracts are complete. The first complete trainable Main/Sub episode cycle now runs through
-exact-token LocalHF training and optional restart-synchronized vLLM rollout; API-backed episodes
-continue to be explicitly non-trainable. Benchmark-driven local training now has a versioned
-xbench development reward and opt-in crash-safe phase transactions; the next validation target is
-a repeatable short xbench training run, not an official benchmark result.
+Architecture Baseline v0.3 adopts WideSeek-R1 as the primary RL environment while retaining the
+project-owned exact-token LocalHF training and optional restart-synchronized vLLM rollout paths.
+The provider-neutral `ResearchTask` and Search/Access contracts are in place; the next delivery
+slice is the bounded multi-round Main/Sub agent loop. xbench remains a held-out generalized
+evaluation path rather than the source of new training tasks.

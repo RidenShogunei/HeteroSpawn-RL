@@ -9,8 +9,8 @@ from typing import TYPE_CHECKING, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from heterospawn.benchmarks.xbench import BenchmarkTask
 from heterospawn.domain.ids import EpisodeId, PolicyId, RolloutId, TaskId
+from heterospawn.domain.tasks import ResearchTask
 from heterospawn.domain.training import PolicyTrainingBatch, TrainingPhase, canonical_digest
 from heterospawn.domain.versions import RolloutRevision
 from heterospawn.errors import ConfigurationError
@@ -41,7 +41,7 @@ class OutcomeRewardService(Protocol):
     @property
     def revision(self) -> str: ...
 
-    async def score(self, task: BenchmarkTask, trace: TrainableEpisodeTrace) -> float: ...
+    async def score(self, task: ResearchTask, trace: TrainableEpisodeTrace) -> float: ...
 
 
 class RewardConfig(BaseModel):
@@ -111,7 +111,7 @@ class RewardComposer:
 
     async def score(
         self,
-        task: BenchmarkTask,
+        task: ResearchTask,
         trace: TrainableEpisodeTrace,
     ) -> EpisodeReward:
         outcome_reward = (
@@ -175,7 +175,7 @@ class TrainableRolloutBatchFactory:
         self,
         *,
         cycle_id: str,
-        tasks: tuple[BenchmarkTask, ...],
+        tasks: tuple[ResearchTask, ...],
         rollouts_per_task: int,
         orchestrator: TrainableEpisodeOrchestrator,
         reward: RewardComposer,
@@ -266,7 +266,7 @@ class TrainableRolloutBatchFactory:
     async def _run_task_group(
         self,
         *,
-        task: BenchmarkTask,
+        task: ResearchTask,
         phase: TrainingPhase,
         policy_revisions: tuple[tuple[PolicyId, RolloutRevision], ...],
     ) -> TaskRolloutGroup:
@@ -338,7 +338,7 @@ class TrainableAlternatingCycleRunner:
         self,
         *,
         cycle_id: str,
-        tasks: tuple[BenchmarkTask, ...],
+        tasks: tuple[ResearchTask, ...],
         transaction_context: PhaseTransactionContext | None = None,
     ) -> TrainableCycleResult:
         if (self._transaction_store is None) != (transaction_context is None):

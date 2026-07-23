@@ -1,10 +1,21 @@
 # HeteroSpawn-RL 项目设计书
 
 > 暂定项目名：**HeteroSpawn-RL**  
-> 文档状态：Architecture Baseline v0.2  
+> 文档状态：Architecture Baseline v0.3
 > 目标读者：项目成员、本地 coding agent、后续复现实验人员  
 > 文档目的：指导一个独立新仓库从零实现“异构 Main/Sub、动态 spawn、fresh-rollout 交替强化学习”的 Deep Research 系统  
-> 重要说明：本项目参考 DrMAS、verl 和 RLinf/WideSeek-R1 的架构思想，但不以复制某个项目内部实现为前提。
+> 重要说明：本项目采用 WideSeek-R1 的任务、工具与奖励环境语义，但保留自有 rollout、LoRA 训练、版本同步和 phase transaction；不依赖 RLinf 运行时。
+
+### v0.3 变更摘要
+
+- 将 WideSeek-R1 固定为主要 RL 环境，将 xbench 调整为 held-out 泛化评测；
+- 引入 provider-neutral `ResearchTask`，参考答案仅存在于 evaluator 私有记录；
+- 固定 Main/Sub 多轮 tool-call 语义、Search→Access URL provenance 和 episode 级预算；
+- 支持 shared-policy joint update 与独立 Main/Sub fresh alternating 两种训练拓扑；
+- 固定训练数据、Wiki-2018、上游实现与基础模型 revision，资源使用前逐文件校验；
+- 下载采用官方 Hugging Face 优先、三次可重试失败后切换兼容镜像的策略；
+- MiniMax 仅作为版本化的非官方开发 Judge，Judge 最终失败必须使 phase 失败；
+- 远端完整验收采用 4096 token 上下文、短训练与恢复，不引入分布式 optimizer。
 
 ### v0.2 变更摘要
 
@@ -77,7 +88,8 @@
 - 支持共享策略、异构联合训练、同 rollout 分别训练、fresh 交替训练等实验模式；
 - 支持规则奖励、Judge 奖励和成本惩罚的组合；
 - 支持本地检索环境和后续真实 Web/DeepResearch 环境；
-- 支持 verl 与 RLinf 作为首批候选训练 backend，但核心代码保持 backend-independent；
+- WideSeek-R1 作为主要 RL 环境，核心训练 backend 保持 project-owned 和
+  backend-independent；verl、RLinf、OpenRLHF 的原生运行时不作为当前依赖；
 - 支持训练、推理、评测、离线回放和完整可观测性。
 
 ### 2.2 第一阶段明确不做

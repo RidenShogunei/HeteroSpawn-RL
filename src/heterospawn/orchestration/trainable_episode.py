@@ -8,7 +8,6 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal
 
-from heterospawn.benchmarks.xbench import BenchmarkTask
 from heterospawn.domain.ids import (
     AgentInstanceId,
     EpisodeId,
@@ -16,6 +15,7 @@ from heterospawn.domain.ids import (
     RolloutId,
     StepId,
 )
+from heterospawn.domain.tasks import ResearchTask
 from heterospawn.domain.training import (
     GenerationRequest,
     GenerationResult,
@@ -120,7 +120,7 @@ class TrainableEpisodeOrchestrator:
 
     async def run(
         self,
-        task: BenchmarkTask,
+        task: ResearchTask,
         episode_id: EpisodeId,
         rollout_id: RolloutId,
         policy_revisions: tuple[tuple[PolicyId, RolloutRevision], ...],
@@ -373,7 +373,7 @@ class TrainableEpisodeOrchestrator:
     async def _generate_main_action(
         self,
         *,
-        task: BenchmarkTask,
+        task: ResearchTask,
         episode_id: EpisodeId,
         rollout_id: RolloutId,
         revisions: Mapping[PolicyId, RolloutRevision],
@@ -499,7 +499,7 @@ class TrainableEpisodeOrchestrator:
     async def _run_sub(
         self,
         *,
-        task: BenchmarkTask,
+        task: ResearchTask,
         episode_id: EpisodeId,
         rollout_id: RolloutId,
         revisions: Mapping[PolicyId, RolloutRevision],
@@ -585,7 +585,7 @@ class TrainableEpisodeOrchestrator:
     def _trajectory_step(
         self,
         *,
-        task: BenchmarkTask,
+        task: ResearchTask,
         episode_id: EpisodeId,
         rollout_id: RolloutId,
         step_id: StepId,
@@ -695,7 +695,7 @@ class TrainableEpisodeOrchestrator:
     @staticmethod
     def _trace(
         *,
-        task: BenchmarkTask,
+        task: ResearchTask,
         episode_id: EpisodeId,
         rollout_id: RolloutId,
         revisions: tuple[tuple[PolicyId, RolloutRevision], ...],

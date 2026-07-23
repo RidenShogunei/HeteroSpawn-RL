@@ -17,7 +17,6 @@ from heterospawn.backends.vllm_rollout.models import (
     VllmRolloutConfig,
 )
 from heterospawn.backends.vllm_rollout.process import SubprocessVllmWorkerFactory
-from heterospawn.benchmarks.xbench import BenchmarkTask
 from heterospawn.domain.ids import (
     AgentInstanceId,
     EpisodeId,
@@ -26,6 +25,7 @@ from heterospawn.domain.ids import (
     StepId,
     TaskId,
 )
+from heterospawn.domain.tasks import ResearchTask
 from heterospawn.domain.training import GenerationRequest, GenerationResult, TrajectoryStep
 from heterospawn.domain.versions import RoleBinding, RolloutRevision
 from heterospawn.errors import ConfigurationError, RolloutRevisionMismatch
@@ -49,7 +49,7 @@ class _ContractOutcomeReward:
 
     revision = "vllm-trainable-cycle-contract-v1"
 
-    async def score(self, task: BenchmarkTask, trace: TrainableEpisodeTrace) -> float:
+    async def score(self, task: ResearchTask, trace: TrainableEpisodeTrace) -> float:
         del task
         return 0.0 if str(trace.episode_id).endswith("episode-0") else 1.0
 
@@ -400,7 +400,7 @@ async def _run_trainable_episode_cycle(
     ).run_cycle(
         cycle_id="vllm-trainable-cycle-1",
         tasks=(
-            BenchmarkTask(
+            ResearchTask(
                 task_id=TaskId("vllm-trainable-cycle-task"),
                 prompt=(
                     "This is a strict orchestration contract check. On the initial turn, "
