@@ -36,6 +36,9 @@ vllm-turing = [
   "vllm==0.7.0; platform_system == 'Linux'",
   "xformers==0.0.28.post3; platform_system == 'Linux'",
 ]
+wideseek = [
+  "huggingface-hub>=0.34,<2",
+]
 dev = [
   "mypy>=1.10,<2",
   "pytest>=8.2,<9",

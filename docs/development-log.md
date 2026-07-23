@@ -67,3 +67,10 @@ This file records milestone-level events. Fine-grained work remains in GitHub is
   sibling-isolated failures, and exact-token retention across every model turn.
 - Versioned the WideSeek tool schema, parser, and prompts against the pinned upstream revision.
   Canonical tool request/result payloads and their digests are retained as auditable trace facts.
+- Added the pinned WideSeek training-data trust manifest, bounded official-to-mirror fallback,
+  resumable standard Hub downloads, corrupt-file quarantine, and answer-safe split inspection.
+- Verified all 60,000 real width/depth/hybrid records and 129,978,280 bytes through the mirror
+  after the official endpoint was unreachable; the committed manifest remains source-independent.
+- Ported boxed and Markdown-table parsing, required/unique-column checks, item-level F1, a
+  provider-neutral semantic Judge with digest-only cache, and auditable role-specific reward
+  totals. Judge failure is phase-fatal rather than silently scored as zero.

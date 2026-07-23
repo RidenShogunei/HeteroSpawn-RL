@@ -34,6 +34,12 @@ from heterospawn.training.transactions import (
     PhaseTransactionInput,
     PhaseTransactionManager,
 )
+from heterospawn.training.wideseek_reward import (
+    RoleRewardTotals,
+    WideSeekRewardBreakdown,
+    WideSeekRewardConfig,
+    WideSeekRewardService,
+)
 
 __all__ = [
     "AlternatingCoordinator",
@@ -56,6 +62,7 @@ __all__ = [
     "PolicyService",
     "RewardComposer",
     "RewardConfig",
+    "RoleRewardTotals",
     "RolloutArtifactProvider",
     "TaskRolloutGroup",
     "TrainableAlternatingCycleRunner",
@@ -63,5 +70,8 @@ __all__ = [
     "TrainableRolloutBatchFactory",
     "TrainingBackend",
     "TrainingBatchBuilder",
+    "WideSeekRewardBreakdown",
+    "WideSeekRewardConfig",
+    "WideSeekRewardService",
     "normalize_outcome_advantages",
 ]

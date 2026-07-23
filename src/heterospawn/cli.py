@@ -163,6 +163,49 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=Path("artifacts/vllm-rollout/report.json"),
     )
+    fetch_parser = subparsers.add_parser(
+        "wideseek-fetch-assets",
+        help="download and verify pinned WideSeek runtime assets",
+    )
+    fetch_parser.add_argument(
+        "--manifest",
+        type=Path,
+        default=Path("manifests/wideseek-train-data.json"),
+    )
+    fetch_parser.add_argument(
+        "--destination",
+        type=Path,
+        default=Path("artifacts/wideseek-assets/train-data"),
+    )
+    fetch_parser.add_argument(
+        "--endpoint",
+        choices=("auto", "official", "mirror"),
+        default="auto",
+    )
+    fetch_parser.add_argument(
+        "--verify-only",
+        action="store_true",
+        help="verify files copied from another machine without network access",
+    )
+    wideseek_inspect = subparsers.add_parser(
+        "wideseek-inspect-data",
+        help="verify and inspect one WideSeek split without printing references",
+    )
+    wideseek_inspect.add_argument(
+        "--manifest",
+        type=Path,
+        default=Path("manifests/wideseek-train-data.json"),
+    )
+    wideseek_inspect.add_argument(
+        "--data-dir",
+        type=Path,
+        default=Path("artifacts/wideseek-assets/train-data"),
+    )
+    wideseek_inspect.add_argument(
+        "--split",
+        choices=("width_20k", "depth_20k", "hybrid_20k"),
+        default="hybrid_20k",
+    )
     return parser
 
 
@@ -251,6 +294,35 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         )
         print(json.dumps(report, ensure_ascii=False, sort_keys=True))
+        return 0
+    if args.command == "wideseek-fetch-assets":
+        from heterospawn.assets import AssetPreparer, load_asset_manifest
+
+        manifest = load_asset_manifest(args.manifest)
+        preparer = AssetPreparer()
+        asset_report = (
+            preparer.verify_copy(manifest, args.destination)
+            if args.verify_only
+            else preparer.prepare(manifest, args.destination, endpoint=args.endpoint)
+        )
+        print(asset_report.model_dump_json())
+        return 0
+    if args.command == "wideseek-inspect-data":
+        from heterospawn.assets import load_asset_manifest
+        from heterospawn.benchmarks.wideseek import load_wideseek_dataset
+
+        manifest = load_asset_manifest(args.manifest)
+        filename = f"{args.split}.jsonl"
+        expected = next((file for file in manifest.files if file.path == filename), None)
+        if expected is None:
+            raise SystemExit(f"split is absent from manifest: {args.split}")
+        wideseek_dataset = load_wideseek_dataset(
+            args.data_dir / filename,
+            split=args.split,
+            expected_sha256=expected.sha256,
+            revision=manifest.revision,
+        )
+        print(wideseek_dataset.summary().model_dump_json())
         return 0
     return 0
 
