@@ -46,6 +46,6 @@ The Linux launcher validates all immutable bytes before deployment, keeps the ve
 read-only, creates a mutable copy-on-write Qdrant deployment, pins the upstream checkout, and
 stops both child services on exit.
 
-This validation is a protocol/implementation result. The complete 156 GB service was not launched
-on the development laptop. A full remote Search-to-Access run remains required before the PR5
-training report can claim end-to-end real-environment acceptance.
+This protocol/implementation result was subsequently exercised against the complete 156 GB
+deployment. The full environment and training-cycle evidence is recorded in
+`2026-07-23-wideseek-remote-full-acceptance.md`.

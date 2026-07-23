@@ -97,3 +97,16 @@ This file records milestone-level events. Fine-grained work remains in GitHub is
 - Made each LocalHF backend process publish a unique deployment identity. A clean replacement
   process can restore the same immutable weight/optimizer/RNG checkpoint, but it rejects the
   terminated process's rollout revision and publishes a new revision after synchronization.
+- Verified all 3,400 files and 155,895,995,164 bytes of the pinned Wiki-2018 corpus after automatic
+  mirror fallback, then launched the complete Qdrant/E5/Access environment. Qdrant reported
+  26,134,257 indexed vectors and the Access service loaded 5,903,530 pages.
+- Passed a real offline Search-to-Access smoke plus shared `width_20k` and independent `depth_20k`
+  LocalHF cycles on RTX 2080 Ti hardware, including MiniMax development judging, atomic phase
+  commits, and replacement-process recovery. The sampled 0.5B policy used 0-spawn and produced
+  degenerate advantages, so this validates the closed loop but does not claim learning progress.
+- Fixed two full-environment findings: the Linux launcher now passes absolute trusted-manifest
+  paths after changing working directories, and identical concurrent semantic-Judge requests use
+  per-key single-flight instead of racing digest-only cache publication.
+- Made the offline launcher own Qdrant and retrieval as dedicated process groups after full-scale
+  teardown exposed orphaned E5 workers. Bounded group termination passed a parent/child probe, and
+  the acceptance host returned all GPUs to their idle state.
