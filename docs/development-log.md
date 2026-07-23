@@ -56,3 +56,9 @@ This file records milestone-level events. Fine-grained work remains in GitHub is
   publication; recovery preserved one logical optimizer step and did not publish stale registry
   state. Replacement rollout deployments are captured in append-only recovery manifests. The full
   suite reached 70 passed with the optional local-model test skipped by default.
+- Accepted ADR-0004 and Architecture Baseline v0.3: WideSeek-R1 is the primary RL environment,
+  while HeteroSpawn continues to own exact-token rollout, LoRA optimization, synchronization, and
+  phase recovery instead of depending on the blocked RLinf runtime.
+- Introduced the provider-neutral `ResearchTask` boundary and Search/Access service contracts.
+  xbench keeps a compatibility alias and remains a held-out evaluation path; policy-visible tasks
+  no longer carry reference answers.

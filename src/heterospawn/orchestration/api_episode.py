@@ -5,8 +5,8 @@ from __future__ import annotations
 import asyncio
 import json
 
-from heterospawn.benchmarks.xbench import BenchmarkTask
 from heterospawn.domain.ids import AgentInstanceId, EpisodeId, RolloutId
+from heterospawn.domain.tasks import ResearchTask
 from heterospawn.errors import EpisodeRunError, InvalidActionError
 from heterospawn.orchestration.budget import ConcurrencyBudgetLedger
 from heterospawn.orchestration.models import (
@@ -58,7 +58,7 @@ class ApiEpisodeOrchestrator:
         self._ledger = ConcurrencyBudgetLedger(max_concurrency)
         self._semaphore = asyncio.Semaphore(max_concurrency)
 
-    async def run(self, task: BenchmarkTask, episode_id: EpisodeId) -> EpisodeTrace:
+    async def run(self, task: ResearchTask, episode_id: EpisodeId) -> EpisodeTrace:
         events: list[EpisodeEvent] = []
         attempts: list[MainAttempt] = []
         try:
@@ -149,7 +149,7 @@ class ApiEpisodeOrchestrator:
 
     async def _generate_main_action(
         self,
-        task: BenchmarkTask,
+        task: ResearchTask,
         episode_id: EpisodeId,
         *,
         phase: str,
@@ -230,7 +230,7 @@ class ApiEpisodeOrchestrator:
 
     async def _run_sub(
         self,
-        task: BenchmarkTask,
+        task: ResearchTask,
         episode_id: EpisodeId,
         index: int,
         subtask: str,
@@ -302,7 +302,7 @@ class ApiEpisodeOrchestrator:
 
     def _trace(
         self,
-        task: BenchmarkTask,
+        task: ResearchTask,
         episode_id: EpisodeId,
         answer: str,
         attempts: list[MainAttempt],

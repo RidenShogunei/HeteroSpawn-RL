@@ -39,3 +39,35 @@ class SearchResponse(BaseModel):
 
 class SearchService(Protocol):
     async def search(self, request: SearchRequest) -> SearchResponse: ...
+
+
+class AccessRequest(BaseModel):
+    """Fetch one previously discovered document by canonical URL."""
+
+    model_config = ConfigDict(frozen=True, strict=True)
+
+    request_id: str = Field(min_length=1)
+    url: str = Field(min_length=1)
+    info_to_extract: str = Field(min_length=1, max_length=1000)
+    max_characters: int = Field(default=5000, ge=1, le=100000)
+
+
+class AccessResponse(BaseModel):
+    """Immutable page-access result with provider identity."""
+
+    model_config = ConfigDict(frozen=True, strict=True)
+
+    request_id: str = Field(min_length=1)
+    provider: str = Field(min_length=1)
+    provider_revision: str = Field(min_length=1)
+    provider_request_id: str = Field(min_length=1)
+    url: str = Field(min_length=1)
+    content: str
+    truncated: bool
+    raw_response_digest: str = Field(min_length=1)
+
+
+class ResearchToolService(SearchService, Protocol):
+    """Search plus document access used by deep-research environments."""
+
+    async def access(self, request: AccessRequest) -> AccessResponse: ...

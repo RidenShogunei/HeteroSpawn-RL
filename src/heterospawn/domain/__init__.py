@@ -8,6 +8,7 @@ from heterospawn.domain.ids import (
     StepId,
     TaskId,
 )
+from heterospawn.domain.tasks import ResearchTask
 from heterospawn.domain.training import (
     CheckpointRef,
     GenerationRequest,
@@ -31,6 +32,7 @@ __all__ = [
     "PolicyTrainingBatch",
     "PolicyTrainingSample",
     "PromptEncoding",
+    "ResearchTask",
     "RoleBinding",
     "RolloutArtifact",
     "RolloutId",

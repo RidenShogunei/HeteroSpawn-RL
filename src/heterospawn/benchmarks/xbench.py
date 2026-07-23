@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from heterospawn.domain.ids import TaskId
+from heterospawn.domain.tasks import ResearchTask
 from heterospawn.errors import BenchmarkDataError
 
 if TYPE_CHECKING:
@@ -29,13 +30,7 @@ XBENCH_DATASET_PATH = "data/DeepSearch-2510.csv"
 XBENCH_DATASET_SHA256 = "a9378e56b05ec8f007b8ecc8f6ac74900abafd558267acd5839d0d05fbc6977a"
 
 
-class BenchmarkTask(BaseModel):
-    """Policy-visible task data. Ground truth is intentionally absent."""
-
-    model_config = ConfigDict(frozen=True, strict=True)
-
-    task_id: TaskId
-    prompt: str = Field(min_length=1)
+BenchmarkTask = ResearchTask
 
 
 class ExactScoreReport(BaseModel):
