@@ -62,3 +62,8 @@ This file records milestone-level events. Fine-grained work remains in GitHub is
 - Introduced the provider-neutral `ResearchTask` boundary and Search/Access service contracts.
   xbench keeps a compatibility alias and remains a held-out evaluation path; policy-visible tasks
   no longer carry reference answers.
+- Added the bounded WideSeek multi-round agent loop: Main tool-call spawning, Sub Search/Access,
+  per-Sub URL provenance, episode-local concurrency accounting, deterministic event insertion,
+  sibling-isolated failures, and exact-token retention across every model turn.
+- Versioned the WideSeek tool schema, parser, and prompts against the pinned upstream revision.
+  Canonical tool request/result payloads and their digests are retained as auditable trace facts.

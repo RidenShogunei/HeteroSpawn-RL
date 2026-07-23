@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from heterospawn.domain.training import PromptEncoding, canonical_digest
 from heterospawn.policies.base import Message
+from heterospawn.policies.trainable import ToolDefinition
 
 DEFAULT_MODEL_ID = "Qwen/Qwen2.5-0.5B-Instruct"
 DEFAULT_MODEL_REVISION = "7ae557604adf67be50417f59c2c2f167def9a775"
@@ -57,17 +58,33 @@ class LocalPromptEncoder:
             }
         )
 
-    def encode(self, messages: tuple[Message, ...]) -> PromptEncoding:
+    def encode(
+        self,
+        messages: tuple[Message, ...],
+        tools: tuple[ToolDefinition, ...] = (),
+    ) -> PromptEncoding:
         payload = [message.model_dump(mode="json") for message in messages]
-        prompt_ids = self._tokenizer.apply_chat_template(
-            payload,
-            tokenize=True,
-            add_generation_prompt=True,
-        )
+        tool_payload = [tool.as_chat_template_tool() for tool in tools]
+        template_args: dict[str, object] = {
+            "tokenize": True,
+            "add_generation_prompt": True,
+        }
+        if tool_payload:
+            template_args["tools"] = tool_payload
+        prompt_ids = self._tokenizer.apply_chat_template(payload, **template_args)
         return PromptEncoding(
             prompt_ids=tuple(int(token_id) for token_id in prompt_ids),
             tokenizer_revision=self.tokenizer_revision,
-            prompt_template_revision=self.prompt_template_revision,
+            prompt_template_revision=(
+                canonical_digest(
+                    {
+                        "base_revision": self.prompt_template_revision,
+                        "tools": tool_payload,
+                    }
+                )
+                if tool_payload
+                else self.prompt_template_revision
+            ),
         )
 
     def decode(self, response_ids: tuple[int, ...]) -> str:
