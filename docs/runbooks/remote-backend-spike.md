@@ -112,10 +112,12 @@ the future `PolicyService` adapter.
 The product adapter authorized by ADR-0002 is now available under
 `heterospawn.backends.vllm_rollout`. Its opt-in conformance command is
 `heterospawn vllm-rollout-contract-smoke`; it composes LocalHF training with isolated vLLM
-generation, uses restart synchronization, and writes a credential-safe report under ignored
-`artifacts/`. Follow the README command and the product validation record rather than copying the
-one-off spike scripts. Passing this command still does not turn vLLM into a training backend or
-complete the deferred distributed-framework milestone.
+generation, uses restart synchronization, runs a complete two-phase trainable episode cycle, and
+writes a credential-safe report under ignored `artifacts/`. Its phase-specific constrained
+decoding and synthetic reward are contract fixtures, not benchmark settings. Follow the README
+command and validation records rather than copying the one-off spike scripts. Passing this command
+still does not turn vLLM into a training backend or complete the deferred distributed-framework
+milestone.
 
 ## Handoff record
 
