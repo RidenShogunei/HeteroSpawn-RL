@@ -49,6 +49,10 @@ class BenchmarkDataError(HeteroSpawnError):
     """Benchmark input is missing, malformed, or unsafe to expose."""
 
 
+class AssetPreparationError(HeteroSpawnError):
+    """A pinned runtime asset could not be downloaded or verified safely."""
+
+
 class InvalidActionError(HeteroSpawnError):
     """A policy emitted an action that violates the orchestration schema."""
 

@@ -39,6 +39,10 @@ class PhaseTransactionContext(BaseModel):
     rng_state: str = Field(min_length=1)
     sampler_state: str = Field(min_length=1)
     dataset_revision: str = Field(min_length=1)
+    corpus_revision: str = Field(default="unspecified", min_length=1)
+    tool_revision: str = Field(default="unspecified", min_length=1)
+    prompt_revision: str = Field(default="unspecified", min_length=1)
+    judge_revision: str = Field(default="unspecified", min_length=1)
     environment_snapshot: str = Field(min_length=1)
     reward_revision: str = Field(min_length=1)
 

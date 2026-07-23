@@ -1,0 +1,25 @@
+{
+  "schema_revision": "heterospawn-hf-assets-v1",
+  "asset_name": "wideseek-train-data",
+  "repo_id": "RLinf/WideSeek-R1-train-data",
+  "repo_type": "dataset",
+  "revision": "47832ea20581f78d32cd6b32b4b37b985cbbc9df",
+  "files": [
+    {
+      "path": "depth_20k.jsonl",
+      "size": 6460586,
+      "sha256": "b3fd543ddf81962ef140bc992f0eb2185c6abf3132ff0cc266f6532808b20b1a"
+    },
+    {
+      "path": "hybrid_20k.jsonl",
+      "size": 43464582,
+      "sha256": "74492dab6f32f318ae6b5d7e1c77f6c14aac3a8dfc0e749ea2c3bba4af32cd51"
+    },
+    {
+      "path": "width_20k.jsonl",
+      "size": 80053112,
+      "sha256": "7e2c17a5eac063850ff908927378e8a678370726b7c41ca53b824d723f892855"
+    }
+  ],
+  "manifest_digest": "93d124ee9ea849fad828e542c7aff3ecac431be8e4f2ee17001d9b964b1ef49e"
+}

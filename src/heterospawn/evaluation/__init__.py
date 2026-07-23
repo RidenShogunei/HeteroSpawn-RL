@@ -15,6 +15,21 @@ from heterospawn.evaluation.judges import (
     JudgeService,
     MiniMaxDevelopmentJudge,
 )
+from heterospawn.evaluation.semantic_judge import (
+    MiniMaxSemanticJudge,
+    SemanticJudge,
+    SemanticJudgeCache,
+    SemanticJudgeRequest,
+    SemanticJudgeResult,
+    SemanticJudgeRevision,
+)
+from heterospawn.evaluation.wideseek import (
+    MarkdownTable,
+    WideSeekEvaluation,
+    WideSeekEvaluator,
+    parse_boxed_answer,
+    parse_markdown_table,
+)
 
 __all__ = [
     "ApiPilotConfig",
@@ -24,8 +39,19 @@ __all__ = [
     "JudgeResult",
     "JudgeRevision",
     "JudgeService",
+    "MarkdownTable",
     "MiniMaxDevelopmentJudge",
+    "MiniMaxSemanticJudge",
     "PilotEpisodeSummary",
     "PilotManifest",
     "PilotTaskSummary",
+    "SemanticJudge",
+    "SemanticJudgeCache",
+    "SemanticJudgeRequest",
+    "SemanticJudgeResult",
+    "SemanticJudgeRevision",
+    "WideSeekEvaluation",
+    "WideSeekEvaluator",
+    "parse_boxed_answer",
+    "parse_markdown_table",
 ]

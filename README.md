@@ -72,6 +72,21 @@ optimizer state, training batches, checkpoint recovery, or advantage semantics. 
 [rollout product validation](docs/validation/2026-07-23-vllm-product-rollout-contract.md) and
 [trainable-cycle validation](docs/validation/2026-07-23-trainable-episode-cycle.md).
 
+### WideSeek training data
+
+Install the optional Hub dependency, then download and verify the pinned training splits:
+
+```bash
+python -m pip install -e ".[wideseek]"
+heterospawn wideseek-fetch-assets
+heterospawn wideseek-inspect-data --split hybrid_20k
+```
+
+The fetcher uses bounded official-to-mirror fallback, resumable partial downloads, and a committed
+per-file SHA-256 manifest. Copied assets can be checked offline with `--verify-only`; runtime data
+and reference answers are never committed or printed. See the
+[WideSeek environment guide](docs/benchmarks/wideseek-r1.md).
+
 ### Remote backend capability spikes
 
 Remote agents must follow [the remote backend spike runbook](docs/runbooks/remote-backend-spike.md) and run `python3 scripts/remote_preflight.py` before installing or evaluating verl/RLinf. The runbook keeps candidate environments isolated, forbids credentials and benchmark data, and defines the evidence required before a backend-selection ADR.
@@ -84,6 +99,7 @@ The first runnable slice is documented in [docs/benchmarks/xbench-deepsearch.md]
 
 Architecture Baseline v0.3 adopts WideSeek-R1 as the primary RL environment while retaining the
 project-owned exact-token LocalHF training and optional restart-synchronized vLLM rollout paths.
-The provider-neutral `ResearchTask` and Search/Access contracts are in place; the next delivery
-slice is the bounded multi-round Main/Sub agent loop. xbench remains a held-out generalized
-evaluation path rather than the source of new training tasks.
+The provider-neutral task boundary, bounded multi-round Main/Sub loop, pinned training-data
+loader, semantic evaluator, and role-specific reward contracts are in place. The next delivery
+slice is the complete offline Wiki-2018/Qdrant/E5 Search/Access environment. xbench remains a
+held-out generalized evaluation path rather than the source of new training tasks.
