@@ -25,6 +25,10 @@ class TrainingBatchError(HeteroSpawnError):
     """A training batch is empty, inconsistent, or has a conflicting digest."""
 
 
+class PhaseTransactionError(HeteroSpawnError):
+    """A phase transaction is missing, conflicting, corrupt, or unrecoverable."""
+
+
 class CheckpointIntegrityError(HeteroSpawnError):
     """A checkpoint is unknown or fails immutable identity validation."""
 

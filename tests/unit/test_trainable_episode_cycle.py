@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
+from pathlib import Path
 
 import pytest
 
@@ -20,7 +21,9 @@ from heterospawn.policies.base import Message
 from heterospawn.search.base import SearchRequest, SearchResponse
 from heterospawn.search.mock import MockSearchService
 from heterospawn.training import (
+    FilePhaseTransactionStore,
     MockTrainingBackend,
+    PhaseTransactionContext,
     PolicyRegistry,
     RewardComposer,
     RewardConfig,
@@ -235,7 +238,9 @@ async def test_trainable_episode_retains_invalid_attempts_failures_and_exact_tok
 
 
 @pytest.mark.asyncio
-async def test_fresh_alternating_cycle_updates_main_then_sub_with_episode_balancing() -> None:
+async def test_fresh_alternating_cycle_updates_main_then_sub_with_episode_balancing(
+    tmp_path: Path,
+) -> None:
     main_id = PolicyId("main")
     sub_id = PolicyId("sub")
     backend = MockTrainingBackend((main_id, sub_id))
@@ -248,17 +253,29 @@ async def test_fresh_alternating_cycle_updates_main_then_sub_with_episode_balanc
 
     main = _ScriptedPolicyService(backend, main_id, main_script)
     sub = _ScriptedPolicyService(backend, sub_id, lambda request: "evidence")
+    reward = RewardComposer(_IndexedReward(), RewardConfig())
+    transaction_store = FilePhaseTransactionStore(tmp_path / "transactions")
     runner = TrainableAlternatingCycleRunner(
         registry,
         backend,
         _orchestrator(registry=registry, main=main, sub=sub),
-        RewardComposer(_IndexedReward(), RewardConfig()),
+        reward,
         rollouts_per_task=2,
+        transaction_store=transaction_store,
     )
 
     result = await runner.run_cycle(
         cycle_id="cycle-1",
         tasks=(BenchmarkTask(task_id=TaskId("task-1"), prompt="research"),),
+        transaction_context=PhaseTransactionContext(
+            experiment_id="unit-experiment",
+            config_digest="config-digest",
+            rng_state="base64-rng-state",
+            sampler_state="base64-sampler-state",
+            dataset_revision="dataset@1",
+            environment_snapshot="mock-search@1",
+            reward_revision=reward.revision,
+        ),
     )
 
     assert result.updates.main_update is not None
@@ -267,6 +284,10 @@ async def test_fresh_alternating_cycle_updates_main_then_sub_with_episode_balanc
     assert backend.weight_version(main_id).optimizer_step == 1
     assert backend.weight_version(sub_id).optimizer_step == 1
     assert [phase.phase for phase in result.phases] == ["main_update", "sub_update"]
+    assert [manifest.phase_completed for manifest in result.phase_commits] == [
+        "main_update",
+        "sub_update",
+    ]
     main_phase, sub_phase = result.phases
     assert main_phase.degenerate_groups == 0
     assert sub_phase.degenerate_groups == 0

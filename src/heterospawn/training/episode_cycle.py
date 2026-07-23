@@ -22,6 +22,13 @@ from heterospawn.training.batch import (
 )
 from heterospawn.training.coordinator import AlternatingCoordinator, CycleResult
 from heterospawn.training.registry import PolicyRegistry
+from heterospawn.training.transactions import (
+    FilePhaseTransactionStore,
+    PhaseCommitManifest,
+    PhaseTransactionContext,
+    PhaseTransactionEvidence,
+    PhaseTransactionManager,
+)
 
 if TYPE_CHECKING:
     from heterospawn.orchestration.trainable_episode import TrainableEpisodeOrchestrator
@@ -158,6 +165,7 @@ class TrainableCycleResult:
 
     updates: CycleResult
     phases: tuple[PhaseRolloutResult, ...]
+    phase_commits: tuple[PhaseCommitManifest, ...] = ()
 
 
 class TrainableRolloutBatchFactory:
@@ -195,6 +203,12 @@ class TrainableRolloutBatchFactory:
     @property
     def results(self) -> tuple[PhaseRolloutResult, ...]:
         return tuple(self._results)
+
+    def result_for_phase(self, phase: TrainingPhase) -> PhaseRolloutResult:
+        try:
+            return next(result for result in self._results if result.phase == phase)
+        except StopIteration:
+            raise RuntimeError(f"{phase} rollout evidence does not exist") from None
 
     async def build(
         self,
@@ -309,21 +323,33 @@ class TrainableAlternatingCycleRunner:
         reward: RewardComposer,
         *,
         rollouts_per_task: int = 8,
+        transaction_store: FilePhaseTransactionStore | None = None,
     ) -> None:
         if rollouts_per_task < 2:
             raise ValueError("rollouts_per_task must be at least two")
         self._registry = registry
-        self._coordinator = AlternatingCoordinator(registry, backend)
+        self._backend = backend
         self._orchestrator = orchestrator
         self._reward = reward
         self._rollouts_per_task = rollouts_per_task
+        self._transaction_store = transaction_store
 
     async def run_cycle(
         self,
         *,
         cycle_id: str,
         tasks: tuple[BenchmarkTask, ...],
+        transaction_context: PhaseTransactionContext | None = None,
     ) -> TrainableCycleResult:
+        if (self._transaction_store is None) != (transaction_context is None):
+            raise ConfigurationError(
+                "transaction store and per-cycle transaction context must be used together"
+            )
+        if transaction_context is not None:
+            if transaction_context.reward_revision != self._reward.revision:
+                raise ConfigurationError(
+                    "transaction context reward revision does not match cycle reward"
+                )
         factory = TrainableRolloutBatchFactory(
             cycle_id=cycle_id,
             tasks=tasks,
@@ -332,5 +358,41 @@ class TrainableAlternatingCycleRunner:
             reward=self._reward,
             registry=self._registry,
         )
-        updates = await self._coordinator.run_cycle(factory.build)
-        return TrainableCycleResult(updates=updates, phases=factory.results)
+        transaction_manager = (
+            PhaseTransactionManager(
+                store=self._transaction_store,
+                backend=self._backend,
+                registry=self._registry,
+                context=transaction_context,
+                evidence_provider=lambda phase: self._transaction_evidence(
+                    cycle_id,
+                    factory.result_for_phase(phase),
+                ),
+            )
+            if self._transaction_store is not None and transaction_context is not None
+            else None
+        )
+        coordinator = AlternatingCoordinator(
+            self._registry,
+            self._backend,
+            transaction_manager,
+        )
+        updates = await coordinator.run_cycle(factory.build)
+        return TrainableCycleResult(
+            updates=updates,
+            phases=factory.results,
+            phase_commits=transaction_manager.commits if transaction_manager is not None else (),
+        )
+
+    @staticmethod
+    def _transaction_evidence(
+        cycle_id: str,
+        phase: PhaseRolloutResult,
+    ) -> PhaseTransactionEvidence:
+        traces = tuple(trace for group in phase.groups for trace in group.traces)
+        return PhaseTransactionEvidence(
+            cycle_id=cycle_id,
+            task_ids=tuple(group.task_id for group in phase.groups),
+            episode_ids=tuple(trace.episode_id for trace in traces),
+            rollout_ids=tuple(trace.rollout_id for trace in traces),
+        )
