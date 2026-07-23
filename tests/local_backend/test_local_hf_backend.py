@@ -51,7 +51,11 @@ class TinyTokenizer:
         return [1, 5, 6]
 
 
-def _backend(tmp_path: Path) -> LocalHfLoraBackend:
+def _backend(
+    tmp_path: Path,
+    *,
+    dtype: str = "float32",
+) -> LocalHfLoraBackend:
     model_config = transformers.Qwen2Config(
         vocab_size=64,
         hidden_size=32,
@@ -65,45 +69,17 @@ def _backend(tmp_path: Path) -> LocalHfLoraBackend:
         pad_token_id=0,
     )
     model = transformers.Qwen2ForCausalLM(model_config)
+    if dtype == "float16":
+        model = model.half()
     return LocalHfLoraBackend(
         config=LocalLoraConfig(
             model_id="tiny-random-qwen2",
             model_revision="fixture-v1",
             device="cpu",
-            dtype="float32",
+            dtype=dtype,
             max_sequence_length=64,
             max_new_tokens=3,
-            artifact_dir=tmp_path / "checkpoints",
-        ),
-        model=model,
-        tokenizer=TinyTokenizer(),
-        policy_ids=(PolicyId("main"), PolicyId("sub")),
-    )
-
-
-def _fp16_base_backend(tmp_path: Path) -> LocalHfLoraBackend:
-    model_config = transformers.Qwen2Config(
-        vocab_size=64,
-        hidden_size=32,
-        intermediate_size=64,
-        num_hidden_layers=2,
-        num_attention_heads=4,
-        num_key_value_heads=2,
-        max_position_embeddings=128,
-        bos_token_id=1,
-        eos_token_id=2,
-        pad_token_id=0,
-    )
-    model = transformers.Qwen2ForCausalLM(model_config).half()
-    return LocalHfLoraBackend(
-        config=LocalLoraConfig(
-            model_id="tiny-random-qwen2",
-            model_revision="fixture-v1",
-            device="cpu",
-            dtype="float16",
-            max_sequence_length=64,
-            max_new_tokens=3,
-            artifact_dir=tmp_path / "fp16-checkpoints",
+            artifact_dir=tmp_path / f"{dtype}-checkpoints",
         ),
         model=model,
         tokenizer=TinyTokenizer(),
@@ -251,7 +227,7 @@ async def test_export_rollout_artifact_is_exact_and_idempotent(tmp_path: Path) -
 
 @pytest.mark.asyncio
 async def test_all_lora_adapters_remain_float32_with_fp16_base(tmp_path: Path) -> None:
-    backend = _fp16_base_backend(tmp_path)
+    backend = _backend(tmp_path, dtype="float16")
 
     for policy_id in (PolicyId("main"), PolicyId("sub")):
         version = backend.rollout_revision(policy_id).weight_version
