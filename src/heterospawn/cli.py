@@ -139,6 +139,30 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=Path("artifacts/local-contract/report.json"),
     )
+    vllm_parser = subparsers.add_parser(
+        "vllm-rollout-contract-smoke",
+        help="run LocalHF training with restart-synchronized standalone vLLM rollout",
+    )
+    vllm_parser.add_argument("--model-path", type=Path, required=True)
+    vllm_parser.add_argument("--vllm-python", type=Path, default=Path(sys.executable))
+    vllm_parser.add_argument("--training-device", default="cuda:0")
+    vllm_parser.add_argument("--main-rollout-device", default="1")
+    vllm_parser.add_argument("--sub-rollout-device", default="2")
+    vllm_parser.add_argument(
+        "--artifact-dir",
+        type=Path,
+        default=Path("artifacts/vllm-rollout/checkpoints"),
+    )
+    vllm_parser.add_argument(
+        "--runtime-dir",
+        type=Path,
+        default=Path("artifacts/vllm-rollout/runtime"),
+    )
+    vllm_parser.add_argument(
+        "--report",
+        type=Path,
+        default=Path("artifacts/vllm-rollout/report.json"),
+    )
     return parser
 
 
@@ -199,6 +223,30 @@ def main(argv: Sequence[str] | None = None) -> int:
                     model_path=args.model_path,
                     artifact_dir=args.artifact_dir,
                 ),
+                report_path=args.report,
+            )
+        )
+        print(json.dumps(report, ensure_ascii=False, sort_keys=True))
+        return 0
+    if args.command == "vllm-rollout-contract-smoke":
+        from heterospawn.backends.local_hf.config import LocalLoraConfig
+        from heterospawn.backends.vllm_rollout.smoke import (
+            run_vllm_rollout_contract_smoke,
+        )
+
+        report = asyncio.run(
+            run_vllm_rollout_contract_smoke(
+                local_config=LocalLoraConfig(
+                    device=args.training_device,
+                    model_path=args.model_path,
+                    artifact_dir=args.artifact_dir,
+                    max_sequence_length=512,
+                    max_new_tokens=16,
+                ),
+                vllm_python=args.vllm_python,
+                main_rollout_device=args.main_rollout_device,
+                sub_rollout_device=args.sub_rollout_device,
+                runtime_dir=args.runtime_dir,
                 report_path=args.report,
             )
         )

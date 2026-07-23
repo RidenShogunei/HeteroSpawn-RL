@@ -22,6 +22,7 @@ from heterospawn.domain.training import (
     GenerationRequest,
     GenerationResult,
     PolicyTrainingBatch,
+    RolloutArtifact,
     UpdateResult,
     canonical_digest,
 )
@@ -368,6 +369,41 @@ class LocalHfLoraBackend:
         async with self._lock:
             return self._state(policy_id).checkpoint
 
+    async def export_rollout_artifact(
+        self,
+        policy_id: PolicyId,
+        trained_version: WeightVersion,
+    ) -> RolloutArtifact:
+        async with self._lock:
+            state = self._state(policy_id)
+            if state.weight != trained_version:
+                raise WeightVersionMismatch("cannot export unknown or stale training weights")
+            if state.checkpoint.weight_version != trained_version:
+                raise CheckpointIntegrityError("current checkpoint does not match training weights")
+            checkpoint_path = _path_from_uri(state.checkpoint.uri)
+            self._verified_manifest(checkpoint_path, state.checkpoint)
+            destination = (
+                self._artifact_dir
+                / "rollout-artifacts"
+                / f"{_adapter_name(policy_id, 'rollout')}_step-{trained_version.optimizer_step}_"
+                f"{trained_version.checkpoint_digest[:12]}"
+            )
+            format_revision = "peft-lora-v1"
+            artifact_digest = await asyncio.to_thread(
+                _materialize_rollout_artifact,
+                source=checkpoint_path / "adapter.safetensors",
+                destination=destination,
+                format_revision=format_revision,
+                config=self.config,
+            )
+            return RolloutArtifact(
+                policy_id=policy_id,
+                weight_version=trained_version,
+                uri=destination.as_uri(),
+                artifact_digest=artifact_digest,
+                format_revision=format_revision,
+            )
+
     async def restore_checkpoint(self, checkpoint: CheckpointRef) -> WeightVersion:
         async with self._lock:
             path = _path_from_uri(checkpoint.uri)
@@ -640,6 +676,72 @@ def _file_sha256(path: Path) -> str:
         for block in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def _rollout_artifact_digest(path: Path, format_revision: str) -> str:
+    required = ("adapter_config.json", "adapter_model.safetensors")
+    file_digests = {name: _file_sha256(path / name) for name in required}
+    return canonical_digest(
+        {
+            "format_revision": format_revision,
+            "file_digests": file_digests,
+        }
+    )
+
+
+def _materialize_rollout_artifact(
+    *,
+    source: Path,
+    destination: Path,
+    format_revision: str,
+    config: LocalLoraConfig,
+) -> str:
+    adapter_config = {
+        "base_model_name_or_path": (
+            str(config.model_path.resolve()) if config.model_path is not None else config.model_id
+        ),
+        "bias": "none",
+        "fan_in_fan_out": False,
+        "inference_mode": True,
+        "lora_alpha": config.lora_alpha,
+        "lora_dropout": config.lora_dropout,
+        "modules_to_save": None,
+        "peft_type": "LORA",
+        "r": config.lora_rank,
+        "revision": config.model_revision,
+        "target_modules": list(config.lora_target_modules),
+        "task_type": "CAUSAL_LM",
+    }
+    config_text = json.dumps(adapter_config, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+    expected_digest = canonical_digest(
+        {
+            "format_revision": format_revision,
+            "file_digests": {
+                "adapter_config.json": hashlib.sha256(config_text.encode()).hexdigest(),
+                "adapter_model.safetensors": _file_sha256(source),
+            },
+        }
+    )
+    if not destination.exists():
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        temporary = Path(tempfile.mkdtemp(prefix="pending-", dir=destination.parent))
+        try:
+            shutil.copyfile(source, temporary / "adapter_model.safetensors")
+            (temporary / "adapter_config.json").write_text(
+                config_text,
+                encoding="utf-8",
+            )
+            temporary.replace(destination)
+        except Exception:
+            if temporary.exists():
+                shutil.rmtree(temporary)
+            raise
+    actual_digest = _rollout_artifact_digest(destination, format_revision)
+    if actual_digest != expected_digest:
+        raise CheckpointIntegrityError(
+            "existing rollout artifact differs from its training checkpoint"
+        )
+    return actual_digest
 
 
 def _path_from_uri(uri: str) -> Path:
