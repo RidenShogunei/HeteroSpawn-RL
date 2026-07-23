@@ -20,10 +20,10 @@ with 11,264 MiB each, NVIDIA driver 580.82.07, Docker access, host CUDA toolkit 
 Python 3.10.12, `uv`, and about 1.1 TB free disk. Treat this as historical evidence:
 run preflight again before every spike.
 
-The repository is transferred as a Git bundle because the host has no GitHub credentials.
-The checkout records the private GitHub URL as `origin`, but fetch and push are expected to
-fail until the user provides authentication out of band. Never place a token in a remote URL,
-shell history, repository file, or report.
+The repository is public, so clone and fetch over HTTPS require no GitHub credentials. Push still
+requires authentication supplied out of band. A Git bundle remains the fallback when the host
+cannot reach GitHub reliably. Never place a token in a remote URL, shell history, repository file,
+or report.
 
 ## Start every remote task
 
