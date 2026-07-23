@@ -31,8 +31,10 @@ from heterospawn.training.transactions import (
 )
 
 if TYPE_CHECKING:
-    from heterospawn.orchestration.trainable_episode import TrainableEpisodeOrchestrator
-    from heterospawn.orchestration.trainable_models import TrainableEpisodeTrace
+    from heterospawn.orchestration.trainable_models import (
+        TrainableEpisodeRunner,
+        TrainableEpisodeTrace,
+    )
 
 
 class OutcomeRewardService(Protocol):
@@ -177,7 +179,7 @@ class TrainableRolloutBatchFactory:
         cycle_id: str,
         tasks: tuple[ResearchTask, ...],
         rollouts_per_task: int,
-        orchestrator: TrainableEpisodeOrchestrator,
+        orchestrator: TrainableEpisodeRunner,
         reward: RewardComposer,
         registry: PolicyRegistry,
         batch_builder: TrainingBatchBuilder | None = None,
@@ -319,7 +321,7 @@ class TrainableAlternatingCycleRunner:
         self,
         registry: PolicyRegistry,
         backend: TrainingBackend,
-        orchestrator: TrainableEpisodeOrchestrator,
+        orchestrator: TrainableEpisodeRunner,
         reward: RewardComposer,
         *,
         rollouts_per_task: int = 8,

@@ -9,6 +9,7 @@ from heterospawn.orchestration.models import (
 )
 from heterospawn.orchestration.trainable_episode import TrainableEpisodeOrchestrator
 from heterospawn.orchestration.trainable_models import TrainableEpisodeTrace
+from heterospawn.orchestration.wideseek_episode import WideSeekEpisodeOrchestrator
 
 __all__ = [
     "AnswerAction",
@@ -17,5 +18,6 @@ __all__ = [
     "SpawnAction",
     "TrainableEpisodeOrchestrator",
     "TrainableEpisodeTrace",
+    "WideSeekEpisodeOrchestrator",
     "parse_main_action",
 ]
