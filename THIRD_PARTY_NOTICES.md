@@ -16,3 +16,11 @@ pinned to commit `d9f3d8a9db4d7aad1d641029293295503dd3eb2c`.
 RLinf is distributed under the Apache License 2.0. HeteroSpawn-RL implements provider-neutral
 contracts and does not redistribute RLinf runtime code, model weights, datasets, or the Wiki
 corpus.
+
+The optional offline environment interoperates with
+[`RLinf/Wiki-2018-Corpus`](https://huggingface.co/datasets/RLinf/Wiki-2018-Corpus), pinned to
+revision `178d7d037f661be3159b0c3a8a4119b974f01880`, and
+[`intfloat/e5-base-v2`](https://huggingface.co/intfloat/e5-base-v2), pinned to revision
+`f52bf8ec8c7124536f0efb74aca902b2995e5bcd`. Their upstream repositories contain the
+authoritative licenses and notices. Only content-identity manifests are committed here; corpus,
+index, executable, and model bytes are not redistributed.

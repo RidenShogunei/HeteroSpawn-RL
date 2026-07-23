@@ -206,6 +206,43 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("width_20k", "depth_20k", "hybrid_20k"),
         default="hybrid_20k",
     )
+    environment_check = subparsers.add_parser(
+        "wideseek-check-environment",
+        help="verify pinned corpus/retriever assets and probe the offline Search/Access service",
+    )
+    environment_check.add_argument(
+        "--corpus-manifest",
+        type=Path,
+        default=Path("manifests/wideseek-wiki-2018-corpus.json"),
+    )
+    environment_check.add_argument(
+        "--corpus-dir",
+        type=Path,
+        default=Path("artifacts/wideseek-assets/wiki-2018-corpus"),
+    )
+    environment_check.add_argument(
+        "--retriever-manifest",
+        type=Path,
+        default=Path("manifests/wideseek-e5-base-v2.json"),
+    )
+    environment_check.add_argument(
+        "--retriever-dir",
+        type=Path,
+        default=Path("artifacts/wideseek-assets/e5-base-v2"),
+    )
+    environment_check.add_argument(
+        "--service-url",
+        default="http://127.0.0.1:8000",
+    )
+    environment_check.add_argument(
+        "--qdrant-url",
+        default="http://127.0.0.1:6333",
+    )
+    environment_check.add_argument(
+        "--probe-query",
+        default="Red Bull",
+        help="readiness query; text is never included in the report",
+    )
     return parser
 
 
@@ -314,7 +351,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         manifest = load_asset_manifest(args.manifest)
         filename = f"{args.split}.jsonl"
         expected = next((file for file in manifest.files if file.path == filename), None)
-        if expected is None:
+        if expected is None or expected.sha256 is None:
             raise SystemExit(f"split is absent from manifest: {args.split}")
         wideseek_dataset = load_wideseek_dataset(
             args.data_dir / filename,
@@ -323,6 +360,49 @@ def main(argv: Sequence[str] | None = None) -> int:
             revision=manifest.revision,
         )
         print(wideseek_dataset.summary().model_dump_json())
+        return 0
+    if args.command == "wideseek-check-environment":
+        from heterospawn.assets import AssetPreparer, load_asset_manifest
+        from heterospawn.search.wideseek_local import (
+            WideSeekLocalConfig,
+            WideSeekLocalToolService,
+        )
+
+        corpus_manifest = load_asset_manifest(args.corpus_manifest)
+        retriever_manifest = load_asset_manifest(args.retriever_manifest)
+        config = WideSeekLocalConfig(
+            service_url=args.service_url,
+            qdrant_url=args.qdrant_url,
+        )
+        if (
+            corpus_manifest.revision != config.identity.corpus_revision
+            or corpus_manifest.manifest_digest != config.identity.corpus_manifest_digest
+            or retriever_manifest.revision != config.identity.retriever_revision
+            or retriever_manifest.manifest_digest != config.identity.retriever_manifest_digest
+        ):
+            raise SystemExit("asset manifests differ from the pinned environment identity")
+        preparer = AssetPreparer()
+        corpus = preparer.verify_copy(corpus_manifest, args.corpus_dir)
+        retriever = preparer.verify_copy(retriever_manifest, args.retriever_dir)
+        environment = asyncio.run(
+            WideSeekLocalToolService(config).check_environment(
+                probe_query=args.probe_query,
+            )
+        )
+        print(
+            json.dumps(
+                {
+                    "environment": environment.model_dump(mode="json"),
+                    "verified_assets": {
+                        "corpus_files": corpus.verified_files,
+                        "corpus_bytes": corpus.verified_bytes,
+                        "retriever_files": retriever.verified_files,
+                        "retriever_bytes": retriever.verified_bytes,
+                    },
+                },
+                sort_keys=True,
+            )
+        )
         return 0
     return 0
 

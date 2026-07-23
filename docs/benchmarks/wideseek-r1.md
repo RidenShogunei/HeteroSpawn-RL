@@ -67,3 +67,18 @@ The reward record contains an auditable component breakdown and three totals:
 
 Evaluator, Judge, cache, prompt, tool, dataset, corpus, and reward identities are phase-transaction
 inputs. Recovery rejects environment drift rather than reusing stale rollouts.
+
+## Complete offline Search and Access
+
+The product client follows the pinned upstream HTTP shapes:
+
+- `POST /retrieve` with `queries`, `topk`, and `return_scores`;
+- `POST /access` with a list of URLs.
+
+It maps Qdrant payload fields `contents`, `url`, optional `title`, and score into immutable project
+contracts. Responses retain exact service revision and raw-response digest. The health command
+checks the pinned corpus and E5 manifests, Qdrant collection state and vector/HNSW configuration,
+then performs a real Search-to-Access probe without printing its query, URL, snippet, or page.
+
+Deployment instructions are in the
+[offline environment runbook](../runbooks/wideseek-offline-environment.md).
