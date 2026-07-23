@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import copy
 import hashlib
 import importlib
 import json
@@ -119,6 +120,8 @@ class LocalHfLoraBackend:
 
         self._model.to(config.device)
         for policy_id in policy_ids:
+            self._cast_adapter_float32(_adapter_name(policy_id, "train"))
+            self._cast_adapter_float32(_adapter_name(policy_id, "rollout"))
             self._initialize_policy(policy_id)
 
     @classmethod
@@ -311,9 +314,25 @@ class LocalHfLoraBackend:
             if any(abs(weight - 1.0) > 1e-6 for weight in episode_weights.values()):
                 raise TrainingBatchError("aggregation weights must sum to one per episode")
             loss = self._torch.stack(tuple(episode_losses.values())).mean()
+            if not bool(self._torch.isfinite(loss).item()):
+                raise TrainingBatchError("policy loss is not finite")
             loss.backward()
             grad_norm = self._gradient_norm(state.train_adapter)
+            if not self._adapter_gradients_are_finite(state.train_adapter):
+                state.optimizer.zero_grad(set_to_none=True)
+                raise TrainingBatchError("policy gradients are not finite")
+            adapter_before = self._adapter_state(state.train_adapter)
+            optimizer_before = copy.deepcopy(state.optimizer.state_dict())
             state.optimizer.step()
+            if not self._adapter_is_finite(state.train_adapter):
+                self._peft.set_peft_model_state_dict(
+                    self._model,
+                    adapter_before,
+                    adapter_name=state.train_adapter,
+                )
+                state.optimizer.load_state_dict(optimizer_before)
+                state.optimizer.zero_grad(set_to_none=True)
+                raise TrainingBatchError("optimizer produced non-finite adapter weights")
             base_version = state.weight
             checkpoint = self._save_checkpoint(policy_id, base_version.optimizer_step + 1)
             state.weight = checkpoint.weight_version
@@ -524,6 +543,25 @@ class LocalHfLoraBackend:
             if f".{adapter}." in name and parameter.grad is not None:
                 squared += float(parameter.grad.detach().float().norm().cpu()) ** 2
         return float(squared**0.5)
+
+    def _cast_adapter_float32(self, adapter: str) -> None:
+        for name, parameter in self._model.named_parameters():
+            if f".{adapter}." in name:
+                parameter.data = parameter.data.float()
+
+    def _adapter_gradients_are_finite(self, adapter: str) -> bool:
+        return all(
+            bool(self._torch.isfinite(parameter.grad).all().item())
+            for name, parameter in self._model.named_parameters()
+            if f".{adapter}." in name and parameter.grad is not None
+        )
+
+    def _adapter_is_finite(self, adapter: str) -> bool:
+        return all(
+            bool(self._torch.isfinite(parameter).all().item())
+            for name, parameter in self._model.named_parameters()
+            if f".{adapter}." in name
+        )
 
     def _copy_adapter(self, source: str, target: str) -> None:
         state = self._peft.get_peft_model_state_dict(self._model, adapter_name=source)

@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 import pytest
+import torch
+from safetensors.torch import load_file
 
 from heterospawn.backends.local_hf import LocalHfLoraBackend, LocalLoraConfig
 from heterospawn.backends.vllm_rollout.models import rollout_artifact_path
@@ -72,6 +74,36 @@ def _backend(tmp_path: Path) -> LocalHfLoraBackend:
             max_sequence_length=64,
             max_new_tokens=3,
             artifact_dir=tmp_path / "checkpoints",
+        ),
+        model=model,
+        tokenizer=TinyTokenizer(),
+        policy_ids=(PolicyId("main"), PolicyId("sub")),
+    )
+
+
+def _fp16_base_backend(tmp_path: Path) -> LocalHfLoraBackend:
+    model_config = transformers.Qwen2Config(
+        vocab_size=64,
+        hidden_size=32,
+        intermediate_size=64,
+        num_hidden_layers=2,
+        num_attention_heads=4,
+        num_key_value_heads=2,
+        max_position_embeddings=128,
+        bos_token_id=1,
+        eos_token_id=2,
+        pad_token_id=0,
+    )
+    model = transformers.Qwen2ForCausalLM(model_config).half()
+    return LocalHfLoraBackend(
+        config=LocalLoraConfig(
+            model_id="tiny-random-qwen2",
+            model_revision="fixture-v1",
+            device="cpu",
+            dtype="float16",
+            max_sequence_length=64,
+            max_new_tokens=3,
+            artifact_dir=tmp_path / "fp16-checkpoints",
         ),
         model=model,
         tokenizer=TinyTokenizer(),
@@ -215,3 +247,16 @@ async def test_export_rollout_artifact_is_exact_and_idempotent(tmp_path: Path) -
     (artifact_path / "adapter_model.safetensors").write_bytes(b"corrupted")
     with pytest.raises(CheckpointIntegrityError, match="differs from its training checkpoint"):
         await backend.export_rollout_artifact(main, version)
+
+
+@pytest.mark.asyncio
+async def test_all_lora_adapters_remain_float32_with_fp16_base(tmp_path: Path) -> None:
+    backend = _fp16_base_backend(tmp_path)
+
+    for policy_id in (PolicyId("main"), PolicyId("sub")):
+        version = backend.rollout_revision(policy_id).weight_version
+        artifact = await backend.export_rollout_artifact(policy_id, version)
+        tensors = load_file(str(rollout_artifact_path(artifact) / "adapter_model.safetensors"))
+        assert tensors
+        assert {tensor.dtype for tensor in tensors.values()} == {torch.float32}
+        assert all(torch.isfinite(tensor).all() for tensor in tensors.values())
