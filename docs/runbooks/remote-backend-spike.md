@@ -1,12 +1,13 @@
 # Remote backend capability spike runbook
 
-This runbook is the entry point for an agent working on the remote GPU host. Read
-`AGENTS.md`, the architecture baseline's Milestone 2.5 section, and this file before
+This runbook is the entry point for an agent working on the remote GPU host. Read `AGENTS.md`,
+the architecture baseline's Milestone 2.5 section, applicable backend ADRs, and this file before
 installing a framework or changing code.
 
 ## Scope and safety
 
-- The spike evaluates native verl/RLinf capabilities; it does not implement full training or run xbench.
+- Framework spikes evaluate native training capabilities. A standalone rollout-engine spike has
+  narrower acceptance criteria and must not be reported as a training-backend pass.
 - Do not request, copy, print, or store API credentials. The spike uses synthetic prompts and local models.
 - Keep framework-specific objects and configuration outside the domain and orchestration packages.
 - Do not kill GPU processes, delete another checkout, use privileged containers, or occupy every GPU.
@@ -46,8 +47,8 @@ under ignored `artifacts/backend-spikes/<backend>/`.
 
 ## Candidate setup rules
 
-1. Run verl and RLinf in separate containers or virtual environments. Never install either into
-   the system Python or the same environment as the other candidate.
+1. Run every candidate in a separate container or virtual environment. Never install a candidate
+   into the system Python or another candidate's environment.
 2. Prefer an official container compatible with the installed NVIDIA driver. Do not build against
    the host CUDA 11.5 toolkit merely because it is on `PATH`.
 3. Pin the upstream Git commit, image digest, Python, CUDA, PyTorch, rollout engine, and model
@@ -90,6 +91,23 @@ Stop the candidate and record a structured blocker when any of these occurs:
 - the smallest valid configuration still exceeds available memory.
 
 Throughput cannot compensate for a correctness failure.
+
+## Standalone vLLM Turing probe
+
+ADR-0002 permits a standalone vLLM compatibility island for rollout only. On the known sm_75 host,
+use the exact pins recorded in
+`docs/validation/2026-07-23-vllm-turing-rollout-spike.md`; do not install an unbounded current
+vLLM stack and do not reuse a framework environment.
+
+Required rollout evidence is native startup without FA2, token-ID input and round-trip, one
+selected-token log-probability per generated token, 0/1/4 request handling, LoRA loading, distinct
+adapter digests across worker restarts, and resource measurements. Store machine-readable output
+under `artifacts/backend-spikes/vllm-standalone/`. Any thin probe scripts belong in the isolated
+runtime and are not product code or tracked repository fixtures.
+
+This probe does not validate optimizer updates, checkpoint recovery, online adapter hot swap, or
+stale-revision rejection. Those remain responsibilities of the project-owned training backend and
+the future `PolicyService` adapter.
 
 ## Handoff record
 

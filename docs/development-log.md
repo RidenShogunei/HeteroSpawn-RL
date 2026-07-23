@@ -36,4 +36,8 @@ This file records milestone-level events. Fine-grained work remains in GitHub is
 - Recorded RLinf as BLOCKED: vLLM worker hardcodes V1 (needs CC>=8.0), FSDP hardcodes FlashAttention2, and Transformer Engine failed against host CUDA toolkit 11.5; SGLang rollout init was the only partial success.
 - Recorded verl as BLOCKED after RLinf teardown: official docs require >=24 GB HBM and CUDA>=12.8; Docker pull failed; UV install reached Ray init but rollout backends failed (`vllm` API mismatch / `sgl_kernel` sm_75 load failure).
 - Wrote credential-safe validation notes and ignored `artifacts/backend-spikes/{rlinf,verl}/report.json`; deferred backend-selection ADR while both candidates remain blocked on this host profile.
+- Ran an additional isolated OpenRLHF native spike on the same host/model/GPU matrix.
+- Recorded OpenRLHF as BLOCKED: its CLI hard-imported unavailable FlashAttention before SDPA configuration, it forced vLLM V1, and its pinned vLLM/FlashInfer path failed on sm_75.
+- Ran a standalone vLLM Turing spike with the V0/XFormers path: exact token/log-prob trajectories, 0/1/4 requests, two LoRA revisions, and worker-restart adapter refresh passed at about 5.7 GB GPU memory.
+- Accepted ADR-0002: proceed with the project-owned PyTorch/Transformers/PEFT training path and keep standalone vLLM as an isolated optional rollout engine; modern distributed-framework selection remains deferred.
 - Audited repository history and GitHub metadata for credentials/private data, then changed the repository visibility to public. Anonymous GitHub access is allowed; Git bundle transfer remains a fallback for unstable host connectivity.
