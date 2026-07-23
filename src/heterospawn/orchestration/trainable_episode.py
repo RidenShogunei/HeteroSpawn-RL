@@ -81,6 +81,9 @@ class TrainableEpisodeOrchestrator:
         max_spawn_per_episode: int = 4,
         repair_attempts: int = 1,
         sampling_params: tuple[tuple[str, JsonScalar], ...] = (),
+        main_initial_sampling_params: tuple[tuple[str, JsonScalar], ...] | None = None,
+        sub_sampling_params: tuple[tuple[str, JsonScalar], ...] | None = None,
+        main_final_sampling_params: tuple[tuple[str, JsonScalar], ...] | None = None,
     ) -> None:
         if repair_attempts < 0:
             raise ValueError("repair_attempts cannot be negative")
@@ -101,6 +104,17 @@ class TrainableEpisodeOrchestrator:
         self._repair_attempts = repair_attempts
         self._max_spawn_per_episode = max_spawn_per_episode
         self._sampling_params = sampling_params
+        self._main_initial_sampling_params = (
+            sampling_params
+            if main_initial_sampling_params is None
+            else main_initial_sampling_params
+        )
+        self._sub_sampling_params = (
+            sampling_params if sub_sampling_params is None else sub_sampling_params
+        )
+        self._main_final_sampling_params = (
+            sampling_params if main_final_sampling_params is None else main_final_sampling_params
+        )
         self._ledger = ConcurrencyBudgetLedger(max_concurrency)
         self._semaphore = asyncio.Semaphore(max_concurrency)
 
@@ -241,6 +255,7 @@ class TrainableEpisodeOrchestrator:
                 prompt=execution.prompt,
                 result=execution.generation,
                 revisions=revisions,
+                sampling_params=self._sub_sampling_params,
             )
             model_steps.append(step)
             events.append(
@@ -373,6 +388,11 @@ class TrainableEpisodeOrchestrator:
         service = self._services["main"]
         codec = self._codecs["main"]
         expected_revision = revisions[service.policy_id]
+        sampling_params = (
+            self._main_initial_sampling_params
+            if phase == "initial"
+            else self._main_final_sampling_params
+        )
         current_messages = messages
         attempt_causes = causal_step_ids
         last_step_id: StepId | None = None
@@ -390,7 +410,7 @@ class TrainableEpisodeOrchestrator:
                     prompt_ids=prompt.prompt_ids,
                     tokenizer_revision=prompt.tokenizer_revision,
                     prompt_template_revision=prompt.prompt_template_revision,
-                    sampling_params=self._sampling_params,
+                    sampling_params=sampling_params,
                 ),
                 expected_revision,
             )
@@ -438,6 +458,7 @@ class TrainableEpisodeOrchestrator:
                 prompt=prompt,
                 result=result,
                 revisions=revisions,
+                sampling_params=sampling_params,
             )
             model_steps.append(step)
             events.append(
@@ -530,7 +551,7 @@ class TrainableEpisodeOrchestrator:
                         prompt_ids=prompt.prompt_ids,
                         tokenizer_revision=prompt.tokenizer_revision,
                         prompt_template_revision=prompt.prompt_template_revision,
-                        sampling_params=self._sampling_params,
+                        sampling_params=self._sub_sampling_params,
                     ),
                     expected_revision,
                 )
@@ -575,6 +596,7 @@ class TrainableEpisodeOrchestrator:
         prompt: PromptEncoding,
         result: GenerationResult,
         revisions: Mapping[PolicyId, RolloutRevision],
+        sampling_params: tuple[tuple[str, JsonScalar], ...],
     ) -> TrajectoryStep:
         partners = tuple(
             revision
@@ -598,7 +620,7 @@ class TrainableEpisodeOrchestrator:
             response_log_probs=result.response_log_probs,
             tokenizer_revision=prompt.tokenizer_revision,
             prompt_template_revision=prompt.prompt_template_revision,
-            sampling_params=self._sampling_params,
+            sampling_params=sampling_params,
             stop_reason=result.stop_reason,
         )
 

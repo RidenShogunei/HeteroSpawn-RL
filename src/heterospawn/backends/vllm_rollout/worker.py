@@ -78,6 +78,10 @@ class _Runtime:
     def generate_batch(self, requests: list[dict[str, Any]]) -> list[VllmWorkerResult]:
         vllm = importlib.import_module("vllm")
         sampling_params_type = cast(Any, vllm.SamplingParams)
+        guided_decoding_type = cast(
+            Any,
+            importlib.import_module("vllm.sampling_params").GuidedDecodingParams,
+        )
 
         prompts: list[dict[str, list[int]]] = []
         sampling_params = []
@@ -93,6 +97,11 @@ class _Runtime:
                     top_k=sampling.top_k,
                     seed=sampling.seed,
                     logprobs=1,
+                    guided_decoding=(
+                        guided_decoding_type(regex=sampling.guided_regex)
+                        if sampling.guided_regex is not None
+                        else None
+                    ),
                 )
             )
         generate = cast(Any, self._llm.generate)

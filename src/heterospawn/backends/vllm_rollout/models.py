@@ -78,6 +78,7 @@ class VllmSamplingConfig(BaseModel):
     top_p: float = Field(gt=0.0, le=1.0)
     top_k: int = Field(ge=-1)
     seed: int | None = None
+    guided_regex: str | None = Field(default=None, min_length=1)
 
 
 class VllmWorkerResult(BaseModel):

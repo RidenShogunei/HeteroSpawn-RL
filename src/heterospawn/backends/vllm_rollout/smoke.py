@@ -377,6 +377,19 @@ async def _run_trainable_episode_cycle(
         max_spawn_per_episode=1,
         repair_attempts=2,
         sampling_params=(("max_new_tokens", 32), ("do_sample", False)),
+        main_initial_sampling_params=(
+            ("max_new_tokens", 32),
+            ("do_sample", False),
+            (
+                "guided_regex",
+                r'\{"kind":"spawn","subtasks":\["capital of France"\]\}',
+            ),
+        ),
+        main_final_sampling_params=(
+            ("max_new_tokens", 32),
+            ("do_sample", False),
+            ("guided_regex", r'\{"kind":"answer","answer":"Paris"\}'),
+        ),
     )
     return await TrainableAlternatingCycleRunner(
         registry,
