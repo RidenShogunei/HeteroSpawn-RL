@@ -10,6 +10,7 @@ from heterospawn.domain.training import (
     GenerationRequest,
     GenerationResult,
     PolicyTrainingBatch,
+    RolloutArtifact,
     UpdateResult,
 )
 from heterospawn.domain.versions import RolloutRevision, WeightVersion
@@ -45,3 +46,11 @@ class TrainingBackend(Protocol):
     async def save_checkpoint(self, policy_id: PolicyId) -> CheckpointRef: ...
 
     async def restore_checkpoint(self, checkpoint: CheckpointRef) -> WeightVersion: ...
+
+
+class RolloutArtifactProvider(Protocol):
+    async def export_rollout_artifact(
+        self,
+        policy_id: PolicyId,
+        trained_version: WeightVersion,
+    ) -> RolloutArtifact: ...

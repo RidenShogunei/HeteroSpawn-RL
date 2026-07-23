@@ -1,5 +1,6 @@
 """Backend-independent policy training state machines."""
 
+from heterospawn.training.base import PolicyService, RolloutArtifactProvider, TrainingBackend
 from heterospawn.training.batch import (
     OutcomeAdvantageGroup,
     TrainingBatchBuilder,
@@ -15,6 +16,9 @@ __all__ = [
     "MockTrainingBackend",
     "OutcomeAdvantageGroup",
     "PolicyRegistry",
+    "PolicyService",
+    "RolloutArtifactProvider",
+    "TrainingBackend",
     "TrainingBatchBuilder",
     "normalize_outcome_advantages",
 ]

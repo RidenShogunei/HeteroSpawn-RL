@@ -17,6 +17,10 @@ class RolloutRevisionMismatch(HeteroSpawnError):
     """A generation operation reached a rollout service at the wrong revision."""
 
 
+class RolloutServiceError(HeteroSpawnError):
+    """A rollout worker failed to start, serve, synchronize, or recover."""
+
+
 class TrainingBatchError(HeteroSpawnError):
     """A training batch is empty, inconsistent, or has a conflicting digest."""
 

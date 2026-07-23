@@ -34,6 +34,36 @@ python -m venv .venv
 
 The smoke uses the pinned `Qwen/Qwen2.5-0.5B-Instruct` commit with FP16 and separate Main/Sub LoRA train and rollout adapters. Checkpoints and the credential-safe JSON report are written under ignored `artifacts/`. A previously downloaded model directory can be supplied with `--model-path`; its weight SHA-256 must match the pinned revision.
 
+### Optional standalone vLLM rollout
+
+Linux hosts with Turing GPUs can keep training in the project-owned LocalHF backend while moving
+generation to isolated vLLM V0/XFormers workers:
+
+```bash
+uv venv "$HOME/heterospawn-runtime/vllm-product/.venv" --python 3.11
+uv pip install \
+  --python "$HOME/heterospawn-runtime/vllm-product/.venv/bin/python" \
+  -e ".[dev,vllm-turing]"
+
+"$HOME/heterospawn-runtime/vllm-product/.venv/bin/heterospawn" \
+  vllm-rollout-contract-smoke \
+  --model-path /absolute/path/to/Qwen2.5-0.5B-Instruct \
+  --training-device cuda:3 \
+  --main-rollout-device 1 \
+  --sub-rollout-device 2
+```
+
+The conformance command intentionally uses one training GPU and one rollout GPU per independently
+versioned policy. Each rollout worker receives an environment allowlist, an isolated home
+directory, offline Hugging Face settings, and only a verified local base model plus immutable PEFT
+LoRA artifact. Synchronization stops the old worker, loads and hashes the replacement, and
+publishes a new `RolloutRevision` only after verification; a failed replacement rebuilds the
+previous worker.
+
+The pinned compatibility stack is an optional rollout-only dependency. It does not own optimizer
+state, training batches, checkpoint recovery, or advantage semantics. See
+[the product validation record](docs/validation/2026-07-23-vllm-product-rollout-contract.md).
+
 ### Remote backend capability spikes
 
 Remote agents must follow [the remote backend spike runbook](docs/runbooks/remote-backend-spike.md) and run `python3 scripts/remote_preflight.py` before installing or evaluating verl/RLinf. The runbook keeps candidate environments isolated, forbids credentials and benchmark data, and defines the evidence required before a backend-selection ADR.
@@ -44,4 +74,7 @@ The first runnable slice is documented in [docs/benchmarks/xbench-deepsearch.md]
 
 ## Current status
 
-Architecture Baseline v0.2, the API-first benchmark slice, and the Milestone 2 CPU training contracts are complete. Exact-token local-model rollout remains an opt-in backend: API-backed episodes continue to be explicitly non-trainable.
+Architecture Baseline v0.2, the API-first benchmark slice, and the Milestone 2 CPU training
+contracts are complete. Exact-token LocalHF training and optional restart-synchronized vLLM
+rollout are validated reference paths; API-backed episodes continue to be explicitly
+non-trainable.

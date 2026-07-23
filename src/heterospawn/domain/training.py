@@ -209,6 +209,24 @@ class CheckpointRef(BaseModel):
     optimizer_state_digest: str = Field(min_length=1)
 
 
+class RolloutArtifact(BaseModel):
+    """Immutable deployable policy artifact derived from a training checkpoint."""
+
+    model_config = ConfigDict(frozen=True, strict=True)
+
+    policy_id: PolicyId
+    weight_version: WeightVersion
+    uri: str = Field(min_length=1)
+    artifact_digest: str = Field(min_length=1)
+    format_revision: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def version_must_match_policy(self) -> RolloutArtifact:
+        if self.policy_id != self.weight_version.policy_id:
+            raise ValueError("rollout artifact and weight policy_id must match")
+        return self
+
+
 class UpdateResult(BaseModel):
     """Result of one logical optimizer transaction."""
 

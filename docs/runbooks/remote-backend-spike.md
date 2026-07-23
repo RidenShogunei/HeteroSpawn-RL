@@ -109,6 +109,14 @@ This probe does not validate optimizer updates, checkpoint recovery, online adap
 stale-revision rejection. Those remain responsibilities of the project-owned training backend and
 the future `PolicyService` adapter.
 
+The product adapter authorized by ADR-0002 is now available under
+`heterospawn.backends.vllm_rollout`. Its opt-in conformance command is
+`heterospawn vllm-rollout-contract-smoke`; it composes LocalHF training with isolated vLLM
+generation, uses restart synchronization, and writes a credential-safe report under ignored
+`artifacts/`. Follow the README command and the product validation record rather than copying the
+one-off spike scripts. Passing this command still does not turn vLLM into a training backend or
+complete the deferred distributed-framework milestone.
+
 ## Handoff record
 
 Commit only a credential-safe Markdown summary under `docs/validation/`. It must name the upstream

@@ -14,6 +14,7 @@ from heterospawn.domain.training import (
     GenerationResult,
     PolicyTrainingBatch,
     PolicyTrainingSample,
+    RolloutArtifact,
     TrajectoryStep,
     UpdateResult,
 )
@@ -29,6 +30,7 @@ __all__ = [
     "PolicyTrainingBatch",
     "PolicyTrainingSample",
     "RoleBinding",
+    "RolloutArtifact",
     "RolloutId",
     "RolloutRevision",
     "StepId",

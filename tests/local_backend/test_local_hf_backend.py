@@ -9,9 +9,10 @@ from typing import Any, ClassVar
 import pytest
 
 from heterospawn.backends.local_hf import LocalHfLoraBackend, LocalLoraConfig
+from heterospawn.backends.vllm_rollout.models import rollout_artifact_path
 from heterospawn.domain.ids import AgentInstanceId, EpisodeId, PolicyId, RolloutId, StepId, TaskId
 from heterospawn.domain.training import GenerationRequest, TrajectoryStep
-from heterospawn.errors import RolloutRevisionMismatch
+from heterospawn.errors import CheckpointIntegrityError, RolloutRevisionMismatch
 from heterospawn.training import TrainingBatchBuilder
 
 if os.environ.get("HETEROSPAWN_RUN_LOCAL_BACKEND_TESTS") != "1":
@@ -194,3 +195,23 @@ async def test_four_sub_requests_share_endpoint_and_checkpoint_restores(tmp_path
     assert restored == update.trained_version
     assert backend.adapter_hash(sub) == trained_hash
     assert update.checkpoint.optimizer_state_digest
+
+
+@pytest.mark.asyncio
+async def test_export_rollout_artifact_is_exact_and_idempotent(tmp_path: Path) -> None:
+    backend = _backend(tmp_path)
+    main = PolicyId("main")
+    version = backend.rollout_revision(main).weight_version
+
+    first = await backend.export_rollout_artifact(main, version)
+    second = await backend.export_rollout_artifact(main, version)
+
+    assert first == second
+    artifact_path = rollout_artifact_path(first)
+    assert (artifact_path / "adapter_config.json").is_file()
+    assert (artifact_path / "adapter_model.safetensors").is_file()
+    assert first.format_revision == "peft-lora-v1"
+
+    (artifact_path / "adapter_model.safetensors").write_bytes(b"corrupted")
+    with pytest.raises(CheckpointIntegrityError, match="differs from its training checkpoint"):
+        await backend.export_rollout_artifact(main, version)

@@ -25,6 +25,17 @@ local = [
   "torch>=2.4,<3",
   "transformers>=4.47,<5",
 ]
+vllm-turing = [
+  "accelerate==1.2.1; platform_system == 'Linux'",
+  "numpy==1.26.4; platform_system == 'Linux'",
+  "peft==0.14.0; platform_system == 'Linux'",
+  "safetensors==0.5.2; platform_system == 'Linux'",
+  "setuptools==75.8.0; platform_system == 'Linux'",
+  "torch==2.5.1; platform_system == 'Linux'",
+  "transformers==4.48.1; platform_system == 'Linux'",
+  "vllm==0.7.0; platform_system == 'Linux'",
+  "xformers==0.0.28.post3; platform_system == 'Linux'",
+]
 dev = [
   "mypy>=1.10,<2",
   "pytest>=8.2,<9",
