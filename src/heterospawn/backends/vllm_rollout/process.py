@@ -28,6 +28,7 @@ _PASSTHROUGH_ENVIRONMENT = (
     "PATH",
     "TMPDIR",
 )
+_OPEN_UNIX_CONNECTION_ATTRIBUTE = "open_unix_connection"
 
 
 @dataclass
@@ -256,7 +257,10 @@ class SubprocessVllmWorker:
         timeout_seconds: float | None,
     ) -> dict[str, Any]:
         async def exchange() -> dict[str, Any]:
-            open_unix_connection = cast(Any, asyncio.open_unix_connection)  # type: ignore[attr-defined]
+            open_unix_connection = cast(
+                Any,
+                getattr(asyncio, _OPEN_UNIX_CONNECTION_ATTRIBUTE),
+            )
             reader, writer = await open_unix_connection(path=str(self._socket_path))
             try:
                 writer.write(
