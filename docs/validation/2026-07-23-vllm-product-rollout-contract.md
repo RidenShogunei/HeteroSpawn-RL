@@ -64,7 +64,7 @@ are not inherited.
 
 ## Resources
 
-The final credential-isolated run completed in 111.43 seconds, including two initial worker loads,
+The final credential-isolated run completed in 111.64 seconds, including two initial worker loads,
 two optimizer updates, two replacement worker loads, all generations, synchronization, and
 checkpoint restore.
 
@@ -80,7 +80,7 @@ replacements. After completion, the three selected GPUs returned to their idle m
 and no owned rollout worker remained.
 
 The ignored machine-readable report SHA-256 is
-`3c61b636e8ff839c04dae28391b060cefc3bb72c23f9115a55f669a08b821d7b`.
+`1b3addfcb6862f14d0132b913910b7f1d222167498170e5e5afe85edf75a83b6`.
 
 After the GPU run, the same isolated Linux environment passed 10 CPU/tiny-Qwen tests covering the
 LocalHF artifact exporter and the vLLM service state machine. This included exact/idempotent
