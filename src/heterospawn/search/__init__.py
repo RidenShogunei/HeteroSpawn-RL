@@ -16,6 +16,12 @@ from heterospawn.search.minimax_mcp import (
 )
 from heterospawn.search.mock import MockSearchService
 from heterospawn.search.tavily import TavilyConfig, TavilySearchService
+from heterospawn.search.wideseek_local import (
+    WideSeekEnvironmentIdentity,
+    WideSeekEnvironmentReport,
+    WideSeekLocalConfig,
+    WideSeekLocalToolService,
+)
 
 __all__ = [
     "AccessRequest",
@@ -31,4 +37,8 @@ __all__ = [
     "StdioMiniMaxMcpTransport",
     "TavilyConfig",
     "TavilySearchService",
+    "WideSeekEnvironmentIdentity",
+    "WideSeekEnvironmentReport",
+    "WideSeekLocalConfig",
+    "WideSeekLocalToolService",
 ]

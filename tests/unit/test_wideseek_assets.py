@@ -13,8 +13,13 @@ from heterospawn.assets.huggingface import (
     HubDownloadError,
     HuggingFaceAssetManifest,
     create_manifest,
+    load_asset_manifest,
 )
 from heterospawn.errors import AssetPreparationError
+from heterospawn.search.wideseek_local import (
+    WIDESEEK_CORPUS_MANIFEST_DIGEST,
+    WIDESEEK_E5_MANIFEST_DIGEST,
+)
 
 
 def _manifest(content: bytes = b"trusted") -> HuggingFaceAssetManifest:
@@ -115,6 +120,33 @@ def test_existing_machine_copy_uses_same_manifest(tmp_path: Path) -> None:
     assert report.verified_bytes == len(b"trusted")
 
 
+def test_git_blob_digest_verifies_non_lfs_hub_file(tmp_path: Path) -> None:
+    content = b"git object content"
+    header = f"blob {len(content)}\0".encode()
+    manifest = create_manifest(
+        asset_name="git-fixture",
+        repo_id="owner/repo",
+        repo_type="dataset",
+        revision="b" * 40,
+        files=(
+            AssetFile(
+                path="metadata.json",
+                size=len(content),
+                git_blob_sha1=hashlib.sha1(
+                    header + content,
+                    usedforsecurity=False,
+                ).hexdigest(),
+            ),
+        ),
+    )
+    (tmp_path / "metadata.json").write_bytes(content)
+
+    report = AssetPreparer().verify_copy(manifest, tmp_path)
+
+    assert report.verified_files == 1
+    assert report.verified_bytes == len(content)
+
+
 def test_untrusted_hf_endpoint_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HF_ENDPOINT", "https://untrusted.example")
     with pytest.raises(AssetPreparationError, match="HF_ENDPOINT"):
@@ -129,3 +161,16 @@ def test_manifest_rejects_unsafe_asset_paths(path: str) -> None:
             size=0,
             sha256=hashlib.sha256(b"").hexdigest(),
         )
+
+
+def test_committed_offline_manifests_match_environment_identity() -> None:
+    root = Path(__file__).parents[2]
+    corpus = load_asset_manifest(root / "manifests/wideseek-wiki-2018-corpus.json")
+    retriever = load_asset_manifest(root / "manifests/wideseek-e5-base-v2.json")
+
+    assert corpus.manifest_digest == WIDESEEK_CORPUS_MANIFEST_DIGEST
+    assert len(corpus.files) == 3400
+    assert sum(file.size for file in corpus.files) == 155_895_995_164
+    assert retriever.manifest_digest == WIDESEEK_E5_MANIFEST_DIGEST
+    assert len(retriever.files) == 9
+    assert sum(file.size for file in retriever.files) == 438_900_149

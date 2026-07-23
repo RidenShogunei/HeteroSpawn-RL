@@ -82,10 +82,21 @@ heterospawn wideseek-fetch-assets
 heterospawn wideseek-inspect-data --split hybrid_20k
 ```
 
-The fetcher uses bounded official-to-mirror fallback, resumable partial downloads, and a committed
-per-file SHA-256 manifest. Copied assets can be checked offline with `--verify-only`; runtime data
+The fetcher uses bounded official-to-mirror fallback, resumable partial downloads, and committed
+per-file content digests. Copied assets can be checked offline with `--verify-only`; runtime data
 and reference answers are never committed or printed. See the
 [WideSeek environment guide](docs/benchmarks/wideseek-r1.md).
+
+The complete offline environment additionally uses the pinned 156 GB Wiki-2018/Qdrant corpus and
+E5-base-v2. Its Linux launcher verifies every source file, starts a mutable Qdrant deployment and
+the pinned upstream retrieval server, then runs:
+
+```bash
+heterospawn wideseek-check-environment
+```
+
+See the [offline deployment runbook](docs/runbooks/wideseek-offline-environment.md) before
+allocating disk, host RAM, and one retrieval GPU.
 
 ### Remote backend capability spikes
 
@@ -101,5 +112,6 @@ Architecture Baseline v0.3 adopts WideSeek-R1 as the primary RL environment whil
 project-owned exact-token LocalHF training and optional restart-synchronized vLLM rollout paths.
 The provider-neutral task boundary, bounded multi-round Main/Sub loop, pinned training-data
 loader, semantic evaluator, and role-specific reward contracts are in place. The next delivery
-slice is the complete offline Wiki-2018/Qdrant/E5 Search/Access environment. xbench remains a
-held-out generalized evaluation path rather than the source of new training tasks.
+slice connects the complete offline Wiki-2018/Qdrant/E5 Search/Access environment to real short
+shared-policy and independent-policy training cycles. xbench remains a held-out generalized
+evaluation path rather than the source of new training tasks.

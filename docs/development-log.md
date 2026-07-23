@@ -74,3 +74,8 @@ This file records milestone-level events. Fine-grained work remains in GitHub is
 - Ported boxed and Markdown-table parsing, required/unique-column checks, item-level F1, a
   provider-neutral semantic Judge with digest-only cache, and auditable role-specific reward
   totals. Judge failure is phase-fatal rather than silently scored as zero.
+- Pinned the complete 155,895,995,164-byte Wiki-2018/Qdrant inventory and the exact E5-base-v2
+  runtime subset with source-independent content digests.
+- Added the official-shaped offline `/retrieve` and `/access` client, collection/configuration
+  checks, a safe environment report, and a crash-clean Linux launcher for the pinned upstream
+  retrieval server. Full corpus execution remains an opt-in remote acceptance step.

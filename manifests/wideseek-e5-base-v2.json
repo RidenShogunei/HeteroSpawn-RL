@@ -1,0 +1,55 @@
+{
+  "schema_revision": "heterospawn-hf-assets-v1",
+  "asset_name": "wideseek-e5-base-v2",
+  "repo_id": "intfloat/e5-base-v2",
+  "repo_type": "model",
+  "revision": "f52bf8ec8c7124536f0efb74aca902b2995e5bcd",
+  "files": [
+    {
+      "path": "1_Pooling/config.json",
+      "size": 200,
+      "git_blob_sha1": "2a824fa43c359360ecddb16808b539c6be892fef"
+    },
+    {
+      "path": "config.json",
+      "size": 650,
+      "git_blob_sha1": "24b4776266ab6abf7a9d6672f42b77f06ef77b87"
+    },
+    {
+      "path": "model.safetensors",
+      "size": 437955512,
+      "sha256": "d0d559c47d5f71b1d280b13b62a2657f3e3bc70c0786f9ab91a36545e6a8f693"
+    },
+    {
+      "path": "modules.json",
+      "size": 387,
+      "git_blob_sha1": "ac2039abdf6ff023b27c919bb9675cfe378cb10f"
+    },
+    {
+      "path": "sentence_bert_config.json",
+      "size": 57,
+      "git_blob_sha1": "4eca68d85ecd3034cf4174d8a4033a75344ea62d"
+    },
+    {
+      "path": "special_tokens_map.json",
+      "size": 125,
+      "git_blob_sha1": "a8b3208c2884c4efb86e49300fdd3dc877220cdf"
+    },
+    {
+      "path": "tokenizer.json",
+      "size": 711396,
+      "git_blob_sha1": "688882a79f44442ddc1f60d70334a7ff5df0fb47"
+    },
+    {
+      "path": "tokenizer_config.json",
+      "size": 314,
+      "git_blob_sha1": "8046d4d4aff4529a10e0ad47043bdabd6304fb58"
+    },
+    {
+      "path": "vocab.txt",
+      "size": 231508,
+      "git_blob_sha1": "fb140275c155a9c7c5a3b3e0e77a9e839594a938"
+    }
+  ],
+  "manifest_digest": "5877db5cb6f70f910ee862f852515faedb391a15f4558ddb2ed3f2b86f8c88be"
+}

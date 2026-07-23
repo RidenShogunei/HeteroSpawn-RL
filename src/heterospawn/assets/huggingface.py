@@ -29,7 +29,8 @@ class AssetFile(BaseModel):
 
     path: str = Field(min_length=1)
     size: int = Field(ge=0)
-    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    git_blob_sha1: str | None = Field(default=None, pattern=r"^[0-9a-f]{40}$")
 
     @field_validator("path")
     @classmethod
@@ -38,6 +39,12 @@ class AssetFile(BaseModel):
         if path.is_absolute() or "\\" in value or ".." in path.parts or value != path.as_posix():
             raise ValueError("asset path must be a normalized relative POSIX path")
         return value
+
+    @model_validator(mode="after")
+    def exactly_one_content_digest_is_required(self) -> AssetFile:
+        if (self.sha256 is None) == (self.git_blob_sha1 is None):
+            raise ValueError("asset file requires exactly one trusted content digest")
+        return self
 
 
 class HuggingFaceAssetManifest(BaseModel):
@@ -72,7 +79,7 @@ class HuggingFaceAssetManifest(BaseModel):
             "repo_id": self.repo_id,
             "repo_type": self.repo_type,
             "revision": self.revision,
-            "files": [file.model_dump(mode="json") for file in self.files],
+            "files": [file.model_dump(mode="json", exclude_none=True) for file in self.files],
         }
 
 
@@ -412,7 +419,12 @@ class AssetPreparer:
             if not path.is_file():
                 raise AssetPreparationError(f"asset file is missing: {expected.path}")
             size, digest = _file_identity(path)
-            if size != expected.size or digest != expected.sha256:
+            expected_digest = expected.sha256
+            actual_digest = digest
+            if expected.git_blob_sha1 is not None:
+                expected_digest = expected.git_blob_sha1
+                actual_digest = _git_blob_identity(path, size)
+            if size != expected.size or actual_digest != expected_digest:
                 quarantine = destination / ".quarantine"
                 quarantine.mkdir(parents=True, exist_ok=True)
                 quarantined = quarantine / (f"{path.name}.{digest[:12]}.{uuid.uuid4().hex}.corrupt")
@@ -441,6 +453,15 @@ def _file_identity(path: Path) -> tuple[int, str]:
     return size, digest.hexdigest()
 
 
+def _git_blob_identity(path: Path, size: int) -> str:
+    digest = hashlib.sha1(usedforsecurity=False)
+    digest.update(f"blob {size}\0".encode())
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def create_manifest(
     *,
     asset_name: str,
@@ -456,7 +477,7 @@ def create_manifest(
         "repo_id": repo_id,
         "repo_type": repo_type,
         "revision": revision,
-        "files": [file.model_dump(mode="json") for file in ordered],
+        "files": [file.model_dump(mode="json", exclude_none=True) for file in ordered],
     }
     return HuggingFaceAssetManifest(
         schema_revision=ASSET_MANIFEST_SCHEMA,
