@@ -79,3 +79,18 @@ This file records milestone-level events. Fine-grained work remains in GitHub is
 - Added the official-shaped offline `/retrieve` and `/access` client, collection/configuration
   checks, a safe environment report, and a crash-clean Linux launcher for the pinned upstream
   retrieval server. Full corpus execution remains an opt-in remote acceptance step.
+- Completed the WideSeek training closeout path: shared-policy joint updates and independent
+  Main-first fresh alternating updates now consume the same multi-round environment traces,
+  role-aware reward totals, exact token/log-probability samples, version synchronization, and
+  crash-safe phase transactions.
+- Added credential-safe rollout/train smoke commands, a hard 128-call MiniMax development-Judge
+  budget, and environment-drift rejection across dataset, corpus, tool, prompt, Judge, and reward
+  revisions.
+- Removed the superseded xbench training reward and duplicate fixtures. xbench task loading,
+  API pilots, exact evaluation, repeat aggregation, and held-out Judge paths remain intact.
+- A real RTX 4060 controlled-fixture run passed shared and independent WideSeek-shaped cycles at
+  about 3.41 GB peak allocated VRAM. The selected greedy 0.5B rollout produced 0-spawn and
+  zero-variance reward groups, so Main recorded a zero-gradient optimizer transaction and the
+  empty Sub batch was correctly skipped; no reward-improvement claim is made.
+- Fixed LocalHF tool-aware prompt revision validation and cross-platform LF-stable PEFT rollout
+  artifact digests after the real WideSeek smoke exposed both integration boundaries.

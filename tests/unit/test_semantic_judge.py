@@ -84,6 +84,30 @@ async def test_invalid_judge_schema_repairs_once_then_fails_phase() -> None:
     assert len(chat.requests) == 2
 
 
+@pytest.mark.asyncio
+async def test_provider_request_budget_is_hard_and_cache_hits_are_free() -> None:
+    chat = _Chat(
+        [
+            json.dumps({"scores": [1, 0]}),
+            json.dumps({"scores": [0, 1]}),
+        ]
+    )
+    judge = MiniMaxSemanticJudge(  # type: ignore[arg-type]
+        chat,
+        max_provider_requests=1,
+    )
+
+    await judge.judge(_request("first"))
+    cached = await judge.judge(_request("cached"))
+    changed = _request("changed").model_copy(update={"question": "another question"})
+    with pytest.raises(JudgeRequestError, match="budget exhausted"):
+        await judge.judge(changed)
+
+    assert cached.cache_hit is True
+    assert judge.provider_requests == 1
+    assert len(chat.requests) == 1
+
+
 def test_cache_rejects_conflicting_digest_identity() -> None:
     cache = SemanticJudgeCache()
     cache.put("a" * 64, (1,), "digest-1")

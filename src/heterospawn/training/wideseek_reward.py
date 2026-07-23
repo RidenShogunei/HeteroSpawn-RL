@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from heterospawn.domain.ids import EpisodeId, TaskId
 from heterospawn.domain.tasks import ResearchTask
-from heterospawn.domain.training import canonical_digest
+from heterospawn.domain.training import TrainingPhase, canonical_digest
 from heterospawn.evaluation.wideseek import WideSeekEvaluation, WideSeekEvaluator
 from heterospawn.orchestration.trainable_models import TrainableEpisodeTrace
 
@@ -131,6 +131,21 @@ class WideSeekRewardService:
         """Compatibility score for independent Main updates."""
 
         return (await self.score_breakdown(task, trace)).role_totals.main
+
+    async def score_for_phase(
+        self,
+        task: ResearchTask,
+        trace: TrainableEpisodeTrace,
+        phase: TrainingPhase,
+    ) -> float:
+        """Select the topology-specific total before task-level normalization."""
+
+        totals = (await self.score_breakdown(task, trace)).role_totals
+        if phase == "joint_update":
+            return totals.shared
+        if phase == "main_update":
+            return totals.main
+        return totals.sub
 
     async def score_breakdown(
         self,

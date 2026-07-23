@@ -35,6 +35,7 @@ class SemanticJudgeRevision(BaseModel):
     )
     sampling_params: tuple[tuple[str, None | bool | int | float | str], ...]
     max_format_attempts: int = Field(ge=1)
+    max_provider_requests: int = Field(default=128, ge=1)
     comparable_to_official: Literal[False] = False
 
 
@@ -156,14 +157,19 @@ class MiniMaxSemanticJudge:
         cache: SemanticJudgeCache | None = None,
         max_concurrency: int = 4,
         max_format_attempts: int = 2,
+        max_provider_requests: int = 128,
     ) -> None:
         if max_concurrency < 1:
             raise ValueError("semantic Judge max_concurrency must be positive")
         if max_format_attempts < 1:
             raise ValueError("semantic Judge max_format_attempts must be positive")
+        if max_provider_requests < 1:
+            raise ValueError("semantic Judge request budget must be positive")
         self._chat = chat
         self._cache = cache or SemanticJudgeCache()
         self._semaphore = asyncio.Semaphore(max_concurrency)
+        self._budget_lock = asyncio.Lock()
+        self._provider_requests = 0
         self._revision = SemanticJudgeRevision(
             mode="minimax-development",
             provider=chat.revision.provider,
@@ -171,11 +177,16 @@ class MiniMaxSemanticJudge:
             prompt_revision=SEMANTIC_PROMPT_REVISION,
             sampling_params=self._SAMPLING,
             max_format_attempts=max_format_attempts,
+            max_provider_requests=max_provider_requests,
         )
 
     @property
     def revision(self) -> SemanticJudgeRevision:
         return self._revision
+
+    @property
+    def provider_requests(self) -> int:
+        return self._provider_requests
 
     async def judge(self, request: SemanticJudgeRequest) -> SemanticJudgeResult:
         cache_key = canonical_digest(
@@ -223,6 +234,10 @@ class MiniMaxSemanticJudge:
         response_digest = ""
         async with self._semaphore:
             for attempt in range(self._revision.max_format_attempts):
+                async with self._budget_lock:
+                    if self._provider_requests >= self._revision.max_provider_requests:
+                        raise JudgeRequestError("semantic Judge provider request budget exhausted")
+                    self._provider_requests += 1
                 try:
                     result = await self._chat.complete(
                         MiniMaxChatRequest(

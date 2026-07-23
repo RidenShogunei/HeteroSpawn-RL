@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import math
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Protocol, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -44,6 +44,18 @@ class OutcomeRewardService(Protocol):
     def revision(self) -> str: ...
 
     async def score(self, task: ResearchTask, trace: TrainableEpisodeTrace) -> float: ...
+
+
+@runtime_checkable
+class PhaseOutcomeRewardService(Protocol):
+    """Optional role-aware reward route for shared/Main/Sub training phases."""
+
+    async def score_for_phase(
+        self,
+        task: ResearchTask,
+        trace: TrainableEpisodeTrace,
+        phase: TrainingPhase,
+    ) -> float: ...
 
 
 class RewardConfig(BaseModel):
@@ -115,12 +127,15 @@ class RewardComposer:
         self,
         task: ResearchTask,
         trace: TrainableEpisodeTrace,
+        *,
+        phase: TrainingPhase | None = None,
     ) -> EpisodeReward:
-        outcome_reward = (
-            await self._outcome.score(task, trace)
-            if trace.status == "success"
-            else self._config.failed_episode_outcome
-        )
+        if trace.status != "success":
+            outcome_reward = self._config.failed_episode_outcome
+        elif phase is not None and isinstance(self._outcome, PhaseOutcomeRewardService):
+            outcome_reward = await self._outcome.score_for_phase(task, trace, phase)
+        else:
+            outcome_reward = await self._outcome.score(task, trace)
         invalid_component = -self._config.invalid_action_penalty * trace.invalid_main_attempts
         spawn_component = -self._config.spawn_cost * trace.spawn_count
         failure_component = -self._config.sub_failure_penalty * trace.failed_subs
@@ -183,6 +198,7 @@ class TrainableRolloutBatchFactory:
         reward: RewardComposer,
         registry: PolicyRegistry,
         batch_builder: TrainingBatchBuilder | None = None,
+        transaction_context: PhaseTransactionContext | None = None,
     ) -> None:
         if not cycle_id:
             raise ValueError("cycle_id cannot be empty")
@@ -199,6 +215,7 @@ class TrainableRolloutBatchFactory:
         self._reward = reward
         self._registry = registry
         self._batch_builder = batch_builder or TrainingBatchBuilder()
+        self._transaction_context = transaction_context
         self._results: list[PhaseRolloutResult] = []
         self._completed_phases: set[TrainingPhase] = set()
 
@@ -285,8 +302,11 @@ class TrainableRolloutBatchFactory:
                 )
             )
         )
+        self._validate_environment(traces)
         rewards = tuple(
-            await asyncio.gather(*(self._reward.score(task, trace) for trace in traces))
+            await asyncio.gather(
+                *(self._reward.score(task, trace, phase=phase) for trace in traces)
+            )
         )
         reward_map = {reward.episode_id: reward.total for reward in rewards}
         advantages = normalize_outcome_advantages(reward_map)
@@ -296,6 +316,40 @@ class TrainableRolloutBatchFactory:
             rewards=rewards,
             advantages=advantages,
         )
+
+    def _validate_environment(
+        self,
+        traces: tuple[TrainableEpisodeTrace, ...],
+    ) -> None:
+        context = self._transaction_context
+        if context is None:
+            return
+        for trace in traces:
+            for outcome in trace.tool_outcomes:
+                if (
+                    outcome.status == "success"
+                    and outcome.provider_revision != context.environment_snapshot
+                ):
+                    raise ConfigurationError(
+                        "rollout tool revision differs from phase environment identity"
+                    )
+            for event in trace.events:
+                snapshot = event.environment
+                if (
+                    snapshot.search_provider_revision is not None
+                    and snapshot.search_provider_revision != context.environment_snapshot
+                ):
+                    raise ConfigurationError(
+                        "rollout event environment differs from phase environment identity"
+                    )
+                for expected, observed, label in (
+                    (context.prompt_revision, snapshot.prompt_revision, "prompt"),
+                    (context.tool_revision, snapshot.tool_schema_revision, "tool"),
+                ):
+                    if expected != "unspecified" and observed != expected:
+                        raise ConfigurationError(
+                            f"rollout {label} revision differs from phase context"
+                        )
 
     def _episode_id(
         self,
@@ -352,6 +406,11 @@ class TrainableAlternatingCycleRunner:
                 raise ConfigurationError(
                     "transaction context reward revision does not match cycle reward"
                 )
+            task_revisions = {task.dataset_revision for task in tasks}
+            if task_revisions != {transaction_context.dataset_revision}:
+                raise ConfigurationError(
+                    "transaction context dataset revision does not match cycle tasks"
+                )
         factory = TrainableRolloutBatchFactory(
             cycle_id=cycle_id,
             tasks=tasks,
@@ -359,6 +418,7 @@ class TrainableAlternatingCycleRunner:
             orchestrator=self._orchestrator,
             reward=self._reward,
             registry=self._registry,
+            transaction_context=transaction_context,
         )
         transaction_manager = (
             PhaseTransactionManager(

@@ -514,7 +514,9 @@ class LocalHfLoraBackend:
             raise RolloutRevisionMismatch("local rollout revision mismatch")
         if request.tokenizer_revision != self.prompt_encoder.tokenizer_revision:
             raise TrainingBatchError("tokenizer revision mismatch")
-        if request.prompt_template_revision != self.prompt_encoder.prompt_template_revision:
+        if not self.prompt_encoder.accepts_prompt_template_revision(
+            request.prompt_template_revision
+        ):
             raise TrainingBatchError("prompt-template revision mismatch")
 
     def _sample_log_probs(
@@ -765,10 +767,7 @@ def _materialize_rollout_artifact(
         temporary = Path(tempfile.mkdtemp(prefix="pending-", dir=destination.parent))
         try:
             shutil.copyfile(source, temporary / "adapter_model.safetensors")
-            (temporary / "adapter_config.json").write_text(
-                config_text,
-                encoding="utf-8",
-            )
+            (temporary / "adapter_config.json").write_bytes(config_text.encode())
             temporary.replace(destination)
         except Exception:
             if temporary.exists():

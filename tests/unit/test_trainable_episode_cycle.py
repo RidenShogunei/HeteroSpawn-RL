@@ -14,7 +14,7 @@ from heterospawn.domain.training import (
     PromptEncoding,
 )
 from heterospawn.domain.versions import RoleBinding, RolloutRevision
-from heterospawn.errors import RolloutRevisionMismatch
+from heterospawn.errors import ConfigurationError, RolloutRevisionMismatch
 from heterospawn.orchestration import TrainableEpisodeOrchestrator
 from heterospawn.orchestration.trainable_models import TrainableEpisodeTrace
 from heterospawn.policies.base import Message
@@ -272,8 +272,8 @@ async def test_fresh_alternating_cycle_updates_main_then_sub_with_episode_balanc
             config_digest="config-digest",
             rng_state="base64-rng-state",
             sampler_state="base64-sampler-state",
-            dataset_revision="dataset@1",
-            environment_snapshot="mock-search@1",
+            dataset_revision="unspecified",
+            environment_snapshot="deterministic-v1",
             reward_revision=reward.revision,
         ),
     )
@@ -396,3 +396,68 @@ async def test_shared_policy_joint_cycle_uses_one_physical_update() -> None:
         "main",
         "sub",
     }
+
+
+@pytest.mark.asyncio
+async def test_transaction_context_rejects_dataset_or_environment_drift(
+    tmp_path: Path,
+) -> None:
+    main_id = PolicyId("main")
+    sub_id = PolicyId("sub")
+    backend = MockTrainingBackend((main_id, sub_id))
+    registry = _registry(backend, main_id, sub_id)
+
+    def main_script(request: GenerationRequest) -> str:
+        if ":main:initial:" in request.request_id:
+            return '{"kind":"spawn","subtasks":["lookup"]}'
+        return '{"kind":"answer","answer":"done"}'
+
+    reward = RewardComposer(_IndexedReward(), RewardConfig())
+    runner = TrainableAlternatingCycleRunner(
+        registry,
+        backend,
+        _orchestrator(
+            registry=registry,
+            main=_ScriptedPolicyService(backend, main_id, main_script),
+            sub=_ScriptedPolicyService(backend, sub_id, lambda request: "evidence"),
+        ),
+        reward,
+        rollouts_per_task=2,
+        transaction_store=FilePhaseTransactionStore(tmp_path / "transactions"),
+    )
+    base_context = dict(
+        experiment_id="drift-check",
+        config_digest="config",
+        rng_state="rng",
+        sampler_state="sampler",
+        corpus_revision="corpus",
+        tool_revision="unspecified",
+        prompt_revision="unspecified",
+        judge_revision="judge",
+        reward_revision=reward.revision,
+    )
+    task = BenchmarkTask(task_id=TaskId("task-1"), prompt="research")
+
+    with pytest.raises(ConfigurationError, match="dataset revision"):
+        await runner.run_cycle(
+            cycle_id="dataset-drift",
+            tasks=(task,),
+            transaction_context=PhaseTransactionContext(
+                **base_context,
+                dataset_revision="another-dataset",
+                environment_snapshot="deterministic-v1",
+            ),
+        )
+
+    with pytest.raises(ConfigurationError, match="environment"):
+        await runner.run_cycle(
+            cycle_id="environment-drift",
+            tasks=(task,),
+            transaction_context=PhaseTransactionContext(
+                **base_context,
+                dataset_revision="unspecified",
+                environment_snapshot="stale-environment",
+            ),
+        )
+    assert backend.weight_version(main_id).optimizer_step == 0
+    assert backend.weight_version(sub_id).optimizer_step == 0

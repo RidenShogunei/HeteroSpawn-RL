@@ -57,6 +57,7 @@ class LocalPromptEncoder:
                 "chat_template": getattr(tokenizer, "chat_template", None),
             }
         )
+        self._issued_prompt_template_revisions = {self.prompt_template_revision}
 
     def encode(
         self,
@@ -72,20 +73,27 @@ class LocalPromptEncoder:
         if tool_payload:
             template_args["tools"] = tool_payload
         prompt_ids = self._tokenizer.apply_chat_template(payload, **template_args)
+        prompt_template_revision = (
+            canonical_digest(
+                {
+                    "base_revision": self.prompt_template_revision,
+                    "tools": tool_payload,
+                }
+            )
+            if tool_payload
+            else self.prompt_template_revision
+        )
+        self._issued_prompt_template_revisions.add(prompt_template_revision)
         return PromptEncoding(
             prompt_ids=tuple(int(token_id) for token_id in prompt_ids),
             tokenizer_revision=self.tokenizer_revision,
-            prompt_template_revision=(
-                canonical_digest(
-                    {
-                        "base_revision": self.prompt_template_revision,
-                        "tools": tool_payload,
-                    }
-                )
-                if tool_payload
-                else self.prompt_template_revision
-            ),
+            prompt_template_revision=prompt_template_revision,
         )
+
+    def accepts_prompt_template_revision(self, revision: str) -> bool:
+        """Return whether this encoder issued the revision for an encoded prompt."""
+
+        return revision in self._issued_prompt_template_revisions
 
     def decode(self, response_ids: tuple[int, ...]) -> str:
         """Decode only for environment/action interpretation, never for training reconstruction."""

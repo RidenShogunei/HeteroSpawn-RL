@@ -47,8 +47,8 @@ The environment semantics can be adopted without adopting that runtime.
 - Use MiniMax only as a versioned, cached development semantic Judge. It is not an official
   WideSeek or xbench comparable evaluator, and terminal Judge failure fails the phase.
 - Keep xbench as a held-out generalized evaluation path. Supersede ADR-0003 for new training runs;
-  its xbench reward adapter remains only for reproducing earlier validation until the WideSeek
-  evaluator fully replaces the training fixture.
+  remove its dedicated training reward and fixtures once the WideSeek evaluator fully replaces
+  them.
 
 ## Consequences
 

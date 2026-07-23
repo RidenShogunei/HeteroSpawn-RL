@@ -12,7 +12,13 @@ from heterospawn.backends.local_hf import LocalHfLoraBackend, LocalLoraConfig
 from heterospawn.backends.vllm_rollout.models import rollout_artifact_path
 from heterospawn.domain.ids import AgentInstanceId, EpisodeId, PolicyId, RolloutId, StepId, TaskId
 from heterospawn.domain.training import GenerationRequest, TrajectoryStep
-from heterospawn.errors import CheckpointIntegrityError, RolloutRevisionMismatch
+from heterospawn.errors import (
+    CheckpointIntegrityError,
+    RolloutRevisionMismatch,
+    TrainingBatchError,
+)
+from heterospawn.policies.base import Message
+from heterospawn.policies.trainable import ToolDefinition
 from heterospawn.training import TrainingBatchBuilder
 
 if os.environ.get("HETEROSPAWN_RUN_LOCAL_BACKEND_TESTS") != "1":
@@ -46,8 +52,11 @@ class TinyTokenizer:
         *,
         tokenize: bool,
         add_generation_prompt: bool,
+        tools: list[dict[str, object]] | None = None,
     ) -> list[int]:
         assert tokenize and add_generation_prompt and messages
+        if tools is not None:
+            assert tools
         return [1, 5, 6]
 
 
@@ -170,6 +179,35 @@ async def test_exact_generate_update_sync_and_partner_isolation(tmp_path: Path) 
     assert backend.adapter_hash(main, rollout=True) == backend.adapter_hash(main)
     with pytest.raises(RolloutRevisionMismatch):
         await backend.endpoint(main).generate(request, main_revision)
+
+
+@pytest.mark.asyncio
+async def test_generation_accepts_only_prompt_revisions_issued_for_tool_schema(
+    tmp_path: Path,
+) -> None:
+    backend = _backend(tmp_path)
+    main = PolicyId("main")
+    encoding = backend.prompt_encoder.encode(
+        (Message(role="user", content="use the tool"),),
+        (
+            ToolDefinition(
+                name="search",
+                description="Search the fixture.",
+                parameters_json='{"type":"object","properties":{}}',
+            ),
+        ),
+    )
+    request = _request(backend, role="main", request_id="tools").model_copy(
+        update={
+            "prompt_ids": encoding.prompt_ids,
+            "prompt_template_revision": encoding.prompt_template_revision,
+        }
+    )
+    await backend.endpoint(main).generate(request, backend.rollout_revision(main))
+
+    forged = request.model_copy(update={"prompt_template_revision": "unissued-revision"})
+    with pytest.raises(TrainingBatchError):
+        await backend.endpoint(main).generate(forged, backend.rollout_revision(main))
 
 
 @pytest.mark.asyncio

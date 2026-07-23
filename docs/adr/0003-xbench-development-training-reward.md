@@ -1,8 +1,11 @@
 # ADR-0003: Use a versioned xbench development correctness reward for initial training
 
-- Status: Accepted
+- Status: Superseded by ADR-0004
 - Date: 2026-07-23
 - Decision owners: repository maintainers
+
+The implementation and dedicated fixtures were removed after the WideSeek training environment
+replaced them; this file remains only as historical rationale.
 
 ## Context
 
