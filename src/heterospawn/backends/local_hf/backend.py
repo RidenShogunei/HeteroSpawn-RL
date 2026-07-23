@@ -10,6 +10,7 @@ import json
 import random
 import shutil
 import tempfile
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -88,6 +89,7 @@ class LocalHfLoraBackend:
         self._updates: dict[str, tuple[str, UpdateResult]] = {}
         self._synced: dict[tuple[PolicyId, str], RolloutRevision] = {}
         self._states: dict[PolicyId, _LocalPolicyState] = {}
+        self._deployment_id = f"local-hf:{config.device}:{uuid.uuid4().hex}"
         self._artifact_dir = config.artifact_dir.resolve()
         self._artifact_dir.mkdir(parents=True, exist_ok=True)
         random.seed(config.seed)
@@ -487,7 +489,7 @@ class LocalHfLoraBackend:
         placeholder_rollout = RolloutRevision(
             policy_id=policy_id,
             weight_version=placeholder,
-            deployment_id=f"local-hf:{self.config.device}:{policy_id}",
+            deployment_id=f"{self._deployment_id}:{policy_id}",
             replica_set_revision=0,
         )
         self._states[policy_id] = _LocalPolicyState(

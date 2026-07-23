@@ -60,6 +60,12 @@ Windows also translated the exported PEFT `adapter_config.json` to CRLF after it
 calculated over LF. Writing the canonical UTF-8 bytes directly made rollout-artifact identity
 stable across Windows and Linux.
 
+The recovery audit also found that the initial LocalHF deployment identifier was deterministic
+from the device and policy name. It is now unique per backend process. An optional tiny-Qwen
+contract test starts a replacement backend, restores the committed adapter, optimizer and RNG
+checkpoint, synchronizes the recovered weights, and verifies both that the adapter hashes match
+and that the replacement rejects the terminated process's rollout revision.
+
 ## Evidence handling
 
 Ignored reports:

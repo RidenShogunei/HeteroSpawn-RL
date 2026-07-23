@@ -94,3 +94,6 @@ This file records milestone-level events. Fine-grained work remains in GitHub is
   empty Sub batch was correctly skipped; no reward-improvement claim is made.
 - Fixed LocalHF tool-aware prompt revision validation and cross-platform LF-stable PEFT rollout
   artifact digests after the real WideSeek smoke exposed both integration boundaries.
+- Made each LocalHF backend process publish a unique deployment identity. A clean replacement
+  process can restore the same immutable weight/optimizer/RNG checkpoint, but it rejects the
+  terminated process's rollout revision and publishes a new revision after synchronization.

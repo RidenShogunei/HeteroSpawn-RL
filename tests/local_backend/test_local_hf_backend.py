@@ -244,6 +244,35 @@ async def test_four_sub_requests_share_endpoint_and_checkpoint_restores(tmp_path
 
 
 @pytest.mark.asyncio
+async def test_restart_restores_weights_under_a_new_deployment_identity(tmp_path: Path) -> None:
+    backend = _backend(tmp_path / "original")
+    main = PolicyId("main")
+    request = _request(backend, role="main", request_id="restart")
+    original_revision = backend.rollout_revision(main)
+    result = await backend.endpoint(main).generate(request, original_revision)
+    batch = TrainingBatchBuilder().build(
+        batch_id="restart-update-1",
+        phase="main_update",
+        target_policy_id=main,
+        expected_base_version=original_revision.weight_version,
+        steps=(_step(request, result, step_id="restart-step"),),
+        episode_advantages={request.episode_id: 1.0},
+    )
+    update = await backend.update_policy(main, batch, original_revision.weight_version)
+    committed_revision = await backend.sync_rollout_weights(main, update.trained_version)
+
+    replacement = _backend(tmp_path / "replacement")
+    await replacement.restore_checkpoint(update.checkpoint)
+    recovered_revision = await replacement.sync_rollout_weights(main, update.trained_version)
+
+    assert recovered_revision.weight_version == committed_revision.weight_version
+    assert recovered_revision.deployment_id != committed_revision.deployment_id
+    assert replacement.adapter_hash(main) == replacement.adapter_hash(main, rollout=True)
+    with pytest.raises(RolloutRevisionMismatch):
+        await replacement.endpoint(main).generate(request, committed_revision)
+
+
+@pytest.mark.asyncio
 async def test_export_rollout_artifact_is_exact_and_idempotent(tmp_path: Path) -> None:
     backend = _backend(tmp_path)
     main = PolicyId("main")
