@@ -22,11 +22,12 @@ was installed during this audit.
 - `uv`: available
 - Home filesystem: approximately 1.1 TB free
 - Existing HeteroSpawn checkout: none
-- Private GitHub repository access: unavailable
+- GitHub access at audit time: the then-private repository was unavailable without credentials
 
 ## Consequences
 
-- Transfer the repository without credentials using a Git bundle.
+- The initial transfer used a credential-free Git bundle. The repository was subsequently made
+  public, so anonymous clone/fetch is now permitted; retain bundle transfer as a network fallback.
 - Install Python 3.11 and all candidate dependencies in isolated runtime directories or containers.
 - Prefer pinned official containers; do not treat the host CUDA 11.5 toolkit as the candidate build
   target merely because the newer driver can run newer CUDA containers.

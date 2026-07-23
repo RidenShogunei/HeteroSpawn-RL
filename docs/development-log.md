@@ -36,3 +36,4 @@ This file records milestone-level events. Fine-grained work remains in GitHub is
 - Recorded RLinf as BLOCKED: vLLM worker hardcodes V1 (needs CC>=8.0), FSDP hardcodes FlashAttention2, and Transformer Engine failed against host CUDA toolkit 11.5; SGLang rollout init was the only partial success.
 - Recorded verl as BLOCKED after RLinf teardown: official docs require >=24 GB HBM and CUDA>=12.8; Docker pull failed; UV install reached Ray init but rollout backends failed (`vllm` API mismatch / `sgl_kernel` sm_75 load failure).
 - Wrote credential-safe validation notes and ignored `artifacts/backend-spikes/{rlinf,verl}/report.json`; deferred backend-selection ADR while both candidates remain blocked on this host profile.
+- Audited repository history and GitHub metadata for credentials/private data, then changed the repository visibility to public. Anonymous GitHub access is allowed; Git bundle transfer remains a fallback for unstable host connectivity.
