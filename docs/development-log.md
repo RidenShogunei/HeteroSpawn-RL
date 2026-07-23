@@ -28,3 +28,11 @@ This file records milestone-level events. Fine-grained work remains in GitHub is
 - Added executable CPU contracts for stale-version rejection, immutable update/sync/checkpoint transitions, shared and frozen policies, 0/1/4-Sub advantage groups, episode-balanced weights, and empty Sub batches.
 - Added the optional LocalHF LoRA reference backend and validated the pinned Qwen2.5-0.5B model on one RTX 4060 Laptop GPU: independent Main/Sub optimizer steps, explicit sync barriers, stale-revision rejection, four shared Sub calls, and checkpoint restore all passed.
 - Audited the remote RTX 2080 Ti host without mutation and added a credential-safe preflight plus a remote-agent runbook for isolated verl/RLinf capability spikes.
+
+## 2026-07-23
+
+- Ran sequential native capability spikes for RLinf then verl on one idle RTX 2080 Ti with shared pinned `Qwen2.5-0.5B-Instruct` and the five-item contract matrix.
+- Kept candidates in isolated `$HOME/heterospawn-runtime/{rlinf,verl}` environments; never co-installed or co-ran them.
+- Recorded RLinf as BLOCKED: vLLM worker hardcodes V1 (needs CC>=8.0), FSDP hardcodes FlashAttention2, and Transformer Engine failed against host CUDA toolkit 11.5; SGLang rollout init was the only partial success.
+- Recorded verl as BLOCKED after RLinf teardown: official docs require >=24 GB HBM and CUDA>=12.8; Docker pull failed; UV install reached Ray init but rollout backends failed (`vllm` API mismatch / `sgl_kernel` sm_75 load failure).
+- Wrote credential-safe validation notes and ignored `artifacts/backend-spikes/{rlinf,verl}/report.json`; deferred backend-selection ADR while both candidates remain blocked on this host profile.
