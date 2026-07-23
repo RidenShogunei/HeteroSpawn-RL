@@ -7,8 +7,6 @@ from pathlib import Path
 from typing import Any, ClassVar
 
 import pytest
-import torch
-from safetensors.torch import load_file
 
 from heterospawn.backends.local_hf import LocalHfLoraBackend, LocalLoraConfig
 from heterospawn.backends.vllm_rollout.models import rollout_artifact_path
@@ -24,6 +22,8 @@ if os.environ.get("HETEROSPAWN_RUN_LOCAL_BACKEND_TESTS") != "1":
     )
 
 transformers = importlib.import_module("transformers")
+torch = importlib.import_module("torch")
+safetensors_torch = importlib.import_module("safetensors.torch")
 
 pytestmark = pytest.mark.local_backend
 
@@ -232,7 +232,9 @@ async def test_all_lora_adapters_remain_float32_with_fp16_base(tmp_path: Path) -
     for policy_id in (PolicyId("main"), PolicyId("sub")):
         version = backend.rollout_revision(policy_id).weight_version
         artifact = await backend.export_rollout_artifact(policy_id, version)
-        tensors = load_file(str(rollout_artifact_path(artifact) / "adapter_model.safetensors"))
+        tensors = safetensors_torch.load_file(
+            str(rollout_artifact_path(artifact) / "adapter_model.safetensors")
+        )
         assert tensors
         assert {tensor.dtype for tensor in tensors.values()} == {torch.float32}
         assert all(torch.isfinite(tensor).all() for tensor in tensors.values())
