@@ -22,6 +22,25 @@ An official-comparable report requires the pinned upstream evaluator, its judge 
 
 The pinned upstream default is five repeats per task. It records average score, best-of-N, and a randomly tie-broken majority vote after sending non-exact answers to the Gemini 2.0 judge. `development-repeat-exact-only` preserves the repeat denominators and deterministic direct-match shortcut, but intentionally omits the judge and majority vote; it is therefore always non-comparable.
 
+### Development training reward
+
+Benchmark-driven development training uses the separate `XBenchOutcomeReward` contract defined by
+[ADR-0003](../adr/0003-xbench-development-training-reward.md). It returns binary correctness and
+supports only `development-exact-only` or a pinned non-official development Judge. An
+official-comparable Judge is rejected at construction and evaluation time.
+
+The adapter binds each cached verdict to episode ID, task ID, and a digest of the terminal answer.
+Concurrent retries share one Judge call, while reuse of an episode ID for different content is
+rejected. Reward audit records contain only IDs, booleans, revisions, usage, latency, and digests;
+questions, answers, Judge text, and model text do not cross the evaluator boundary.
+
+Training phases may opt into `FilePhaseTransactionStore`. Before an optimizer step it atomically
+persists the exact digest-protected training input, base checkpoint/revisions, task/episode/rollout
+IDs, configuration, RNG/sampler state, dataset/environment identity, and reward revision. A
+pending checkpoint is recorded before rollout synchronization; only the atomic commit manifest
+publishes the new `RolloutRevision`. Runtime transaction files belong under ignored `artifacts/`
+and must never be committed.
+
 ## API smoke run
 
 The runnable first architecture uses MiniMax for Main/Sub policy calls and a provider-neutral search service. Credentials are environment-only. Network use and external credit spending require an explicit flag:

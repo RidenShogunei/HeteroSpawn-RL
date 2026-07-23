@@ -84,4 +84,6 @@ The first runnable slice is documented in [docs/benchmarks/xbench-deepsearch.md]
 Architecture Baseline v0.2, the API-first benchmark slice, and the Milestone 2 CPU training
 contracts are complete. The first complete trainable Main/Sub episode cycle now runs through
 exact-token LocalHF training and optional restart-synchronized vLLM rollout; API-backed episodes
-continue to be explicitly non-trainable.
+continue to be explicitly non-trainable. Benchmark-driven local training now has a versioned
+xbench development reward and opt-in crash-safe phase transactions; the next validation target is
+a repeatable short xbench training run, not an official benchmark result.

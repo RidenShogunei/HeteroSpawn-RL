@@ -47,3 +47,12 @@ This file records milestone-level events. Fine-grained work remains in GitHub is
 - A real three-GPU validation exposed and fixed FP16 state in later-created PEFT adapters; every LoRA adapter now stays FP32 over the frozen FP16 base, and non-finite losses, gradients, or post-step weights are rejected before checkpoint publication.
 - Added opt-in phase-specific regex-constrained vLLM decoding for deterministic contract tests while leaving normal rollout sampling unconstrained.
 - Passed the complete real-model cycle with two full rollouts in each phase, exact raw-token/log-probability round-trip, Main update/sync, fresh Sub-phase rollout, Sub update/sync, independent revisions, and no stale trajectory reuse.
+- Accepted ADR-0003 for binary xbench development training reward. Exact-only and non-official
+  development-Judge modes keep ground truth evaluator-only, reject official-comparable Judges,
+  and bind idempotent verdict caches to episode/task/response identity.
+- Added crash-safe phase transactions to the trainable cycle: immutable input and pending records,
+  conditional atomic commit publication, empty-Sub commits, and manifest-driven recovery.
+- Passed CPU fault injection before/after pending-checkpoint persistence and before/after manifest
+  publication; recovery preserved one logical optimizer step and did not publish stale registry
+  state. Replacement rollout deployments are captured in append-only recovery manifests. The full
+  suite reached 70 passed with the optional local-model test skipped by default.
