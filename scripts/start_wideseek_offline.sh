@@ -19,6 +19,7 @@ collection="wiki_collection_m32_cef512"
 corpus_revision="178d7d037f661be3159b0c3a8a4119b974f01880"
 service_port="${HETEROSPAWN_RETRIEVAL_PORT:-8000}"
 qdrant_port="${HETEROSPAWN_QDRANT_PORT:-6333}"
+retrieval_python="${HETEROSPAWN_RETRIEVAL_PYTHON:-python}"
 project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 runtime_dir="$(realpath -m "$HETEROSPAWN_RUNTIME_DIR")"
 wiki_dir="$(realpath "$HETEROSPAWN_WIKI_DIR")"
@@ -27,6 +28,10 @@ rlinf_dir="$(realpath "$HETEROSPAWN_RLINF_DIR")"
 
 if ! command -v setsid >/dev/null 2>&1; then
   echo "setsid is required for crash-clean service process groups" >&2
+  exit 2
+fi
+if [[ ! -x "$retrieval_python" ]] && ! command -v "$retrieval_python" >/dev/null 2>&1; then
+  echo "HETEROSPAWN_RETRIEVAL_PYTHON must name an executable Python runtime" >&2
   exit 2
 fi
 
@@ -106,7 +111,7 @@ if [[ "$qdrant_ready" != true ]] || ! kill -0 "$qdrant_pid" 2>/dev/null; then
   exit 1
 fi
 
-setsid python -u "$retrieval_server" \
+setsid "$retrieval_python" -u "$retrieval_server" \
   --pages_path "$wiki_dir/wiki_webpages.jsonl" \
   --topk 3 \
   --retriever_name e5 \

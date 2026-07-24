@@ -8,6 +8,7 @@ import json
 import sys
 from collections.abc import Sequence
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from heterospawn import __version__
 from heterospawn.benchmarks.xbench import BenchmarkTask, load_xbench
@@ -36,6 +37,9 @@ from heterospawn.search.tavily import (
     TavilyConfig,
     TavilySearchService,
 )
+
+if TYPE_CHECKING:
+    from heterospawn.backends.local_hf.config import LocalLoraConfig
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -125,9 +129,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     local_parser.add_argument("--device", default="cuda:0")
     local_parser.add_argument(
+        "--model-profile",
+        choices=("qwen2.5-0.5b", "qwen3-4b"),
+        default="qwen2.5-0.5b",
+    )
+    local_parser.add_argument(
         "--model-path",
         type=Path,
         help="optional local directory whose pinned model weight digest is verified",
+    )
+    local_parser.add_argument(
+        "--model-manifest",
+        type=Path,
+        help="trusted multi-file model manifest; required by the qwen3-4b profile",
     )
     local_parser.add_argument(
         "--artifact-dir",
@@ -301,7 +315,17 @@ def build_parser() -> argparse.ArgumentParser:
         default="http://127.0.0.1:6333",
     )
     wideseek_train.add_argument("--device", default="cuda:0")
+    wideseek_train.add_argument(
+        "--model-profile",
+        choices=("qwen2.5-0.5b", "qwen3-4b"),
+        default="qwen2.5-0.5b",
+    )
     wideseek_train.add_argument("--model-path", type=Path)
+    wideseek_train.add_argument(
+        "--model-manifest",
+        type=Path,
+        help="trusted multi-file model manifest; required by the qwen3-4b profile",
+    )
     wideseek_train.add_argument(
         "--allow-model-download",
         action="store_true",
@@ -309,6 +333,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     wideseek_train.add_argument("--max-sequence-length", type=int, default=4096)
     wideseek_train.add_argument("--max-new-tokens", type=int, default=512)
+    wideseek_train.add_argument(
+        "--do-sample",
+        action="store_true",
+        help="sample from the raw policy so same-task reward normalization can be non-degenerate",
+    )
+    wideseek_train.add_argument("--max-search-message-results", type=int, default=3)
+    wideseek_train.add_argument("--max-search-content-characters", type=int, default=3000)
+    wideseek_train.add_argument("--max-access-characters", type=int, default=2000)
     wideseek_train.add_argument(
         "--judge",
         choices=("none", "minimax-development"),
@@ -389,15 +421,18 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "local-contract-smoke":
         if args.model_path is None and not args.allow_model_download:
             raise SystemExit("--allow-model-download is required for the local model smoke")
-        from heterospawn.backends.local_hf.config import LocalLoraConfig
         from heterospawn.backends.local_hf.smoke import run_local_contract_smoke
 
         report = asyncio.run(
             run_local_contract_smoke(
-                config=LocalLoraConfig(
+                config=_local_lora_config(
+                    model_profile=args.model_profile,
                     device=args.device,
                     model_path=args.model_path,
+                    model_manifest=args.model_manifest,
                     artifact_dir=args.artifact_dir,
+                    max_sequence_length=1024,
+                    max_new_tokens=32,
                 ),
                 report_path=args.report,
             )
@@ -517,7 +552,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise SystemExit("--allow-model-download is required when --model-path is omitted")
         if args.judge == "minimax-development" and not args.allow_network:
             raise SystemExit("--allow-network is required for MiniMax development Judge calls")
-        from heterospawn.backends.local_hf.config import LocalLoraConfig
         from heterospawn.training.wideseek_smoke import run_wideseek_train_smoke
 
         report = asyncio.run(
@@ -530,9 +564,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 data_dir=args.data_dir,
                 service_url=args.service_url,
                 qdrant_url=args.qdrant_url,
-                local_config=LocalLoraConfig(
+                local_config=_local_lora_config(
+                    model_profile=args.model_profile,
                     device=args.device,
                     model_path=args.model_path,
+                    model_manifest=args.model_manifest,
                     artifact_dir=args.artifact_dir,
                     max_sequence_length=args.max_sequence_length,
                     max_new_tokens=args.max_new_tokens,
@@ -541,11 +577,61 @@ def main(argv: Sequence[str] | None = None) -> int:
                 transaction_dir=args.transaction_dir,
                 report_path=args.report,
                 require_sub_update=args.require_sub_update,
+                do_sample=args.do_sample,
+                max_search_message_results=args.max_search_message_results,
+                max_search_content_characters=args.max_search_content_characters,
+                max_access_characters=args.max_access_characters,
             )
         )
         print(json.dumps(report, ensure_ascii=False, sort_keys=True))
         return 0
     return 0
+
+
+def _local_lora_config(
+    *,
+    model_profile: str,
+    device: str,
+    model_path: Path | None,
+    model_manifest: Path | None,
+    artifact_dir: Path,
+    max_sequence_length: int,
+    max_new_tokens: int,
+) -> LocalLoraConfig:
+    from heterospawn.backends.local_hf.config import (
+        QWEN3_4B_MANIFEST_DIGEST,
+        QWEN3_4B_MODEL_ID,
+        QWEN3_4B_MODEL_REVISION,
+        LocalLoraConfig,
+    )
+
+    if model_profile == "qwen3-4b":
+        if model_path is None:
+            raise SystemExit("the qwen3-4b profile requires --model-path")
+        return LocalLoraConfig(
+            model_id=QWEN3_4B_MODEL_ID,
+            model_revision=QWEN3_4B_MODEL_REVISION,
+            model_path=model_path,
+            model_manifest_path=model_manifest or Path("manifests/qwen3-4b.json"),
+            expected_model_manifest_digest=QWEN3_4B_MANIFEST_DIGEST,
+            device=device,
+            dtype="float16",
+            quantization="bnb-4bit",
+            gradient_checkpointing=True,
+            enable_thinking=False,
+            max_sequence_length=max_sequence_length,
+            max_new_tokens=max_new_tokens,
+            artifact_dir=artifact_dir,
+        )
+    if model_manifest is not None:
+        raise SystemExit("--model-manifest is only valid with --model-profile qwen3-4b")
+    return LocalLoraConfig(
+        device=device,
+        model_path=model_path,
+        artifact_dir=artifact_dir,
+        max_sequence_length=max_sequence_length,
+        max_new_tokens=max_new_tokens,
+    )
 
 
 async def _run_api_task(

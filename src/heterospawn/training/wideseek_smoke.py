@@ -20,6 +20,7 @@ from heterospawn.domain.tasks import ResearchTask
 from heterospawn.domain.training import (
     GenerationRequest,
     GenerationResult,
+    JsonScalar,
     PromptEncoding,
     canonical_digest,
 )
@@ -31,7 +32,6 @@ from heterospawn.evaluation.semantic_judge import (
 from heterospawn.evaluation.wideseek import WideSeekEvaluator
 from heterospawn.orchestration.wideseek_actions import WIDESEEK_TOOL_SCHEMA_REVISION
 from heterospawn.orchestration.wideseek_episode import (
-    WIDESEEK_PROMPT_REVISION,
     WideSeekEpisodeOrchestrator,
 )
 from heterospawn.policies.base import Message
@@ -251,6 +251,10 @@ async def run_wideseek_train_smoke(
     report_path: Path,
     require_sub_update: bool = False,
     tool_service: WideSeekLocalToolService | None = None,
+    do_sample: bool = False,
+    max_search_message_results: int = 3,
+    max_search_content_characters: int = 3000,
+    max_access_characters: int = 2000,
 ) -> dict[str, Any]:
     """Run one short real-model WideSeek cycle and emit only safe aggregates."""
 
@@ -309,9 +313,19 @@ async def run_wideseek_train_smoke(
         ),
     )
     reward = RewardComposer(outcome_reward, RewardConfig())
-    sampling_params = (
-        ("max_new_tokens", local_config.max_new_tokens),
-        ("do_sample", False),
+    sampling_params: tuple[tuple[str, JsonScalar], ...] = (
+        (
+            ("max_new_tokens", local_config.max_new_tokens),
+            ("do_sample", True),
+            ("temperature", 1.0),
+            ("top_p", 1.0),
+            ("top_k", 0),
+        )
+        if do_sample
+        else (
+            ("max_new_tokens", local_config.max_new_tokens),
+            ("do_sample", False),
+        )
     )
     orchestrator = WideSeekEpisodeOrchestrator(
         registry,
@@ -325,6 +339,9 @@ async def run_wideseek_train_smoke(
         },
         tools,
         max_concurrency=4,
+        max_search_message_results=max_search_message_results,
+        max_search_content_characters=max_search_content_characters,
+        max_access_characters=max_access_characters,
         sampling_params=sampling_params,
     )
     config_digest = canonical_digest(
@@ -335,6 +352,7 @@ async def run_wideseek_train_smoke(
             "rollouts_per_task": rollouts_per_task,
             "model": local_config.model_dump(mode="json"),
             "sampling_params": sampling_params,
+            "prompt_revision": orchestrator.prompt_revision,
             "environment_revision": tools.provider_revision,
             "reward_revision": reward.revision,
         }
@@ -352,7 +370,7 @@ async def run_wideseek_train_smoke(
         dataset_revision=dataset.revision,
         corpus_revision=tools.identity.corpus_revision,
         tool_revision=WIDESEEK_TOOL_SCHEMA_REVISION,
-        prompt_revision=WIDESEEK_PROMPT_REVISION,
+        prompt_revision=orchestrator.prompt_revision,
         judge_revision=(
             canonical_digest(judge.revision) if judge is not None else "no-semantic-judge"
         ),
@@ -453,6 +471,18 @@ async def run_wideseek_train_smoke(
         "rollouts_per_task": rollouts_per_task,
         "model_id": local_config.model_id,
         "model_revision": local_config.model_revision,
+        "model_identity_kind": local_config.base_model_identity_kind,
+        "model_identity": local_config.base_model_identity,
+        "quantization": local_config.quantization,
+        "gradient_checkpointing": local_config.gradient_checkpointing,
+        "enable_thinking": local_config.enable_thinking,
+        "sampling_params": dict(sampling_params),
+        "sampling_logprob_semantics": "raw-policy",
+        "tool_message_budgets": {
+            "search_results": max_search_message_results,
+            "search_content_characters": max_search_content_characters,
+            "access_characters": max_access_characters,
+        },
         "environment_revision": tools.provider_revision,
         "dataset_revision": dataset.revision,
         "reward_revision": reward.revision,

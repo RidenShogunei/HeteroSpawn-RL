@@ -64,8 +64,13 @@ def _backend(
     tmp_path: Path,
     *,
     dtype: str = "float32",
+    architecture: str = "qwen2",
 ) -> LocalHfLoraBackend:
-    model_config = transformers.Qwen2Config(
+    config_class = transformers.Qwen3Config if architecture == "qwen3" else transformers.Qwen2Config
+    model_class = (
+        transformers.Qwen3ForCausalLM if architecture == "qwen3" else transformers.Qwen2ForCausalLM
+    )
+    model_config = config_class(
         vocab_size=64,
         hidden_size=32,
         intermediate_size=64,
@@ -76,8 +81,9 @@ def _backend(
         bos_token_id=1,
         eos_token_id=2,
         pad_token_id=0,
+        head_dim=8,
     )
-    model = transformers.Qwen2ForCausalLM(model_config)
+    model = model_class(model_config)
     if dtype == "float16":
         model = model.half()
     return LocalHfLoraBackend(
@@ -94,6 +100,54 @@ def _backend(
         tokenizer=TinyTokenizer(),
         policy_ids=(PolicyId("main"), PolicyId("sub")),
     )
+
+
+@pytest.mark.asyncio
+async def test_qwen3_architecture_generates_exact_trainable_trajectory(tmp_path: Path) -> None:
+    backend = _backend(tmp_path, architecture="qwen3")
+    main = PolicyId("main")
+    request = _request(backend, role="main", request_id="qwen3")
+
+    result = await backend.endpoint(main).generate(
+        request,
+        backend.rollout_revision(main),
+    )
+
+    assert result.response_ids
+    assert len(result.response_ids) == len(result.response_log_probs)
+
+
+@pytest.mark.asyncio
+async def test_raw_policy_sampling_preserves_update_logprob_semantics(tmp_path: Path) -> None:
+    backend = _backend(tmp_path, architecture="qwen3")
+    main = PolicyId("main")
+    revision = backend.rollout_revision(main)
+    request = _request(backend, role="main", request_id="sampled").model_copy(
+        update={
+            "sampling_params": (
+                ("max_new_tokens", 3),
+                ("do_sample", True),
+                ("temperature", 1.0),
+                ("top_p", 1.0),
+                ("top_k", 0),
+            )
+        }
+    )
+
+    result = await backend.endpoint(main).generate(request, revision)
+    batch = TrainingBatchBuilder().build(
+        batch_id="sampled-main-update",
+        phase="main_update",
+        target_policy_id=main,
+        expected_base_version=revision.weight_version,
+        steps=(_step(request, result, step_id="sampled-main-step"),),
+        episode_advantages={request.episode_id: 1.0},
+    )
+    update = await backend.update_policy(main, batch, revision.weight_version)
+
+    metrics = dict(update.metrics)
+    assert metrics["old_new_ratio_mean"] == pytest.approx(1.0, abs=1e-5)
+    assert metrics["approx_kl_mean"] == pytest.approx(0.0, abs=1e-5)
 
 
 def _request(

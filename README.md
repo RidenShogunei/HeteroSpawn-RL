@@ -35,6 +35,24 @@ python -m venv .venv
 
 The smoke uses the pinned `Qwen/Qwen2.5-0.5B-Instruct` commit with FP16 and separate Main/Sub LoRA train and rollout adapters. Checkpoints and the credential-safe JSON report are written under ignored `artifacts/`. A previously downloaded model directory can be supplied with `--model-path`; its weight SHA-256 must match the pinned revision.
 
+For research-scale behavior checks on an 11 GB Turing GPU, install the isolated QLoRA profile and
+use the committed multi-shard manifest:
+
+```bash
+python -m pip install -e ".[dev,qlora]"
+heterospawn wideseek-fetch-assets \
+  --manifest manifests/qwen3-4b.json \
+  --destination "$HOME/heterospawn-runtime/models/Qwen3-4B"
+heterospawn local-contract-smoke \
+  --model-profile qwen3-4b \
+  --model-path "$HOME/heterospawn-runtime/models/Qwen3-4B" \
+  --model-manifest manifests/qwen3-4b.json
+```
+
+This profile uses pinned `Qwen/Qwen3-4B`, NF4 4-bit base weights, FP16 compute, gradient
+checkpointing, non-thinking 4096-token prompts, and independent rank-8 LoRA adapters. The 0.5B
+profile remains the default contract and CI model; Qwen3-4B must always be selected explicitly.
+
 ### Optional standalone vLLM rollout
 
 Linux hosts with Turing GPUs can keep training in the project-owned LocalHF backend while moving
@@ -96,9 +114,15 @@ heterospawn wideseek-check-environment
 heterospawn wideseek-rollout-smoke
 heterospawn wideseek-train-smoke \
   --topology shared \
-  --model-path /absolute/path/to/Qwen2.5-0.5B-Instruct \
+  --model-profile qwen3-4b \
+  --model-path /absolute/path/to/Qwen3-4B \
+  --model-manifest manifests/qwen3-4b.json \
   --max-sequence-length 4096 \
-  --max-new-tokens 512
+  --max-new-tokens 1024 \
+  --max-search-message-results 3 \
+  --max-search-content-characters 600 \
+  --max-access-characters 800 \
+  --do-sample
 ```
 
 See the [offline deployment runbook](docs/runbooks/wideseek-offline-environment.md) before
@@ -119,6 +143,7 @@ project-owned exact-token LocalHF training and optional restart-synchronized vLL
 The provider-neutral task boundary, bounded multi-round Main/Sub loop, pinned training-data
 loader, semantic evaluator, role-specific reward contracts, offline Search/Access client, shared
 joint update, independent fresh alternating update, and crash-safe recovery are wired into one
-CLI-driven training cycle. Controlled single-GPU validation passes with the pinned 0.5B model;
-the complete 156 GB environment remains an opt-in remote acceptance run. xbench is held-out
+CLI-driven training cycle. The pinned 0.5B model remains the inexpensive contract baseline, while
+the explicit Qwen3-4B QLoRA profile is the research-scale policy path for 11 GB Turing GPUs. The
+complete 156 GB environment remains an opt-in remote acceptance run. xbench is held-out
 generalization evaluation and no longer has a dedicated training reward path.

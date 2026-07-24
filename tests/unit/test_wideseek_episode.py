@@ -73,6 +73,7 @@ class _ScriptedPolicy:
         self._backend = backend
         self._policy_id = policy_id
         self._script = script
+        self.stop_reason = "eos"
         self.results: dict[str, GenerationResult] = {}
 
     @property
@@ -97,7 +98,7 @@ class _ScriptedPolicy:
             rollout_revision=expected_revision,
             response_ids=response_ids,
             response_log_probs=tuple(-0.01 for _ in response_ids),
-            stop_reason="eos",
+            stop_reason=self.stop_reason,
         )
         self.results[request.request_id] = result
         return result
@@ -182,6 +183,40 @@ def _setup(
     return orchestrator, registry, main, sub, main_codec, sub_codec
 
 
+def test_tool_message_budgets_are_deterministic_and_versioned() -> None:
+    orchestrator, *_ = _setup(
+        lambda request: "answer",
+        lambda request: "summary",
+        max_search_message_results=2,
+        max_search_content_characters=6,
+        max_access_characters=7,
+    )
+    other, *_ = _setup(
+        lambda request: "answer",
+        lambda request: "summary",
+        max_search_content_characters=8,
+        max_access_characters=7,
+    )
+    response = SearchResponse(
+        request_id="search",
+        provider="memory",
+        provider_revision="memory@1",
+        provider_request_id="provider:search",
+        query="query",
+        results=(
+            SearchItem(title="one", url="https://docs/one", content="abcdefgh", score=1.0),
+            SearchItem(title="two", url="https://docs/two", content="ijklmnop", score=0.5),
+        ),
+        raw_response_digest="digest",
+    )
+
+    displayed = orchestrator._search_message_results(response)
+
+    assert [item["content"] for item in displayed] == ["abc", "ijk"]
+    assert all(item["content_truncated"] is True for item in displayed)
+    assert orchestrator.prompt_revision != other.prompt_revision
+
+
 @pytest.mark.asyncio
 async def test_direct_answer_is_zero_spawn() -> None:
     orchestrator, registry, main, _, main_codec, _ = _setup(
@@ -205,6 +240,30 @@ async def test_direct_answer_is_zero_spawn() -> None:
         == main.results[str(trace.model_steps[0].step_id)].response_ids
     )
     assert main_codec.tool_sets == [("subtask",)]
+
+
+@pytest.mark.asyncio
+async def test_length_truncated_direct_answer_is_invalid_and_retried() -> None:
+    orchestrator, registry, main, _, _, _ = _setup(
+        lambda request: "unfinished direct answer",
+        lambda request: "unused",
+    )
+    main.stop_reason = "length"
+
+    trace = await orchestrator.run(
+        ResearchTask(task_id=TaskId("truncated"), prompt="question"),
+        EpisodeId("episode-truncated"),
+        RolloutId("rollout-truncated"),
+        registry.snapshot(),
+    )
+
+    assert trace.status == "failed"
+    assert trace.failure_code == "invalid_main_action"
+    assert trace.invalid_main_attempts == 2
+    assert all(
+        attempt.error_code == "truncated Main output cannot be ANSWER"
+        for attempt in trace.main_attempts
+    )
 
 
 @pytest.mark.asyncio
