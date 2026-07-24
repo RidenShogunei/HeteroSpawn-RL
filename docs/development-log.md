@@ -131,3 +131,16 @@ This file records milestone-level events. Fine-grained work remains in GitHub is
   10 real tool outcomes, 18 trainable sequences, non-degenerate advantages, non-zero gradient,
   adapter update, checkpoint/sync, atomic phase commit, and restore. Peak allocated VRAM was
   7.29 GB and the longest complete training sequence was 1,985 tokens.
+- Merged PR #32 at `7847213882317ba89e37adc997f33890e93dc280`, then ran the real
+  Qwen3-4B independent Main-first fresh-alternating topology from a clean bundle clone without
+  modifying the remote host's dirty checkout.
+- Reverified all 155,895,995,164 corpus bytes, the E5 assets, the 26,134,257-point Qdrant
+  collection, and a non-empty Search-to-Access probe before training.
+- Passed exact trajectories, Main commit before fresh Sub rollout, independent version/sync
+  identities, two atomic phase commits, and checkpoint restore on both a depth `G=2` run and a
+  width `G=4` run. Main produced non-zero gradients and changed only its adapter.
+- Retained the negative learning-signal result: both Sub phases had equal system outcomes, so the
+  required degenerate-group behavior produced zero Sub advantage, zero gradient, and no Sub
+  adapter change despite a non-empty optimizer transaction. This closes the real independent
+  architecture contract, not the non-zero Sub learning gate; no credential was available in the
+  runtime, so no development Judge call was attempted.
