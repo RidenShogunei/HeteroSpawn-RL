@@ -71,8 +71,13 @@ export HETEROSPAWN_WIKI_DIR="$HOME/heterospawn-runtime/wideseek/wiki-2018-corpus
 export HETEROSPAWN_E5_DIR="$HOME/heterospawn-runtime/wideseek/e5-base-v2"
 export HETEROSPAWN_RLINF_DIR="$HOME/heterospawn-runtime/wideseek/RLinf"
 export HETEROSPAWN_RUNTIME_DIR="$HOME/heterospawn-runtime/wideseek/service"
+export HETEROSPAWN_RETRIEVAL_PYTHON="$HOME/heterospawn-runtime/wideseek/.venv/bin/python"
 bash scripts/start_wideseek_offline.sh
 ```
+
+`HETEROSPAWN_RETRIEVAL_PYTHON` may point at an isolated retrieval environment while the
+`heterospawn` command comes from a separate training environment. When it is omitted, the
+launcher uses `python` from `PATH`.
 
 The launcher:
 
@@ -130,6 +135,32 @@ heterospawn wideseek-train-smoke \
   --transaction-dir "$HOME/heterospawn-runtime/results/independent/transactions" \
   --report "$HOME/heterospawn-runtime/results/independent/report.json"
 ```
+
+For the Qwen3-4B research profile, run the training command from an environment installed with
+`.[qlora]` and replace the model arguments with:
+
+```bash
+  --model-profile qwen3-4b \
+  --model-path "$HOME/heterospawn-runtime/models/Qwen3-4B" \
+  --model-manifest manifests/qwen3-4b.json \
+  --max-search-message-results 3 \
+  --max-search-content-characters 600 \
+  --max-access-characters 800 \
+  --do-sample
+```
+
+The QLoRA and retrieval environments may be separate. Select the E5 environment with
+`HETEROSPAWN_RETRIEVAL_PYTHON` when launching Search/Access, and select the QLoRA environment's
+`heterospawn` command for training. Do not install their dependency stacks into each other.
+`--do-sample` explicitly uses temperature 1, top-p 1, and top-k 0 so the recorded old log-probs
+and update-time raw policy log-probs have identical semantics. Warped sampling requires a future
+training contract that also reconstructs the same warper during update.
+The Qwen3 CLI profile disables thinking so a complete action fits the bounded 4096-token smoke
+window. A response that still reaches the generation length limit without a complete tool call is
+an invalid repair attempt, not an `ANSWER`.
+Search and Access model-visible content is deterministically bounded by the two character-budget
+flags. Full response digests and URL provenance remain in the audit trace; changing either budget
+changes the prompt and phase identity.
 
 Use `--require-sub-update` only when the selected acceptance task must demonstrate a non-empty Sub
 batch. A genuine 0-spawn group remains valid: it contributes to the Sub reward baseline, produces

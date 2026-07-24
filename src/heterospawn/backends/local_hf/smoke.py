@@ -156,7 +156,8 @@ async def run_local_contract_smoke(
         "model_id": config.model_id,
         "model_revision": config.model_revision,
         "model_source": "verified_local_path" if config.model_path is not None else "pinned_hub",
-        "model_weight_sha256": config.expected_model_weight_sha256,
+        "base_model_identity_kind": config.base_model_identity_kind,
+        "base_model_identity": config.base_model_identity,
         "device": config.device,
         "gpu_name": torch.cuda.get_device_name(device_index),
         "total_vram_bytes": int(total_memory),
@@ -164,6 +165,8 @@ async def run_local_contract_smoke(
         "peak_allocated_vram_bytes": peak_bytes,
         "elapsed_seconds": elapsed,
         "dtype": config.dtype,
+        "quantization": config.quantization,
+        "gradient_checkpointing": config.gradient_checkpointing,
         "runtime_versions": {
             "torch": torch.__version__,
             "torch_cuda": torch.version.cuda,

@@ -17,6 +17,7 @@ from typing import Any, Literal
 from urllib.parse import unquote, urlparse
 from urllib.request import url2pathname
 
+from heterospawn.assets import AssetPreparer, load_asset_manifest
 from heterospawn.backends.local_hf.config import LocalLoraConfig, LocalPromptEncoder
 from heterospawn.domain.ids import CheckpointId, EpisodeId, PolicyId
 from heterospawn.domain.training import (
@@ -30,6 +31,7 @@ from heterospawn.domain.training import (
 )
 from heterospawn.domain.versions import RolloutRevision, WeightVersion
 from heterospawn.errors import (
+    AssetPreparationError,
     CheckpointIntegrityError,
     ConfigurationError,
     RolloutRevisionMismatch,
@@ -102,6 +104,15 @@ class LocalHfLoraBackend:
         self.prompt_encoder = LocalPromptEncoder(tokenizer, config)
         self._eos_token_id = getattr(tokenizer, "eos_token_id", None)
         self._pad_token_id = getattr(tokenizer, "pad_token_id", self._eos_token_id)
+        if config.quantization == "bnb-4bit":
+            model = peft.prepare_model_for_kbit_training(
+                model,
+                use_gradient_checkpointing=config.gradient_checkpointing,
+            )
+        elif config.gradient_checkpointing:
+            model.gradient_checkpointing_enable()
+            model.config.use_cache = False
+
         lora_config = peft.LoraConfig(
             task_type=peft.TaskType.CAUSAL_LM,
             r=config.lora_rank,
@@ -120,7 +131,8 @@ class LocalHfLoraBackend:
             self._model.add_adapter(rollout_adapter, lora_config)
             self._copy_adapter(train_adapter, rollout_adapter)
 
-        self._model.to(config.device)
+        if config.quantization == "none":
+            self._model.to(config.device)
         for policy_id in policy_ids:
             self._cast_adapter_float32(_adapter_name(policy_id, "train"))
             self._cast_adapter_float32(_adapter_name(policy_id, "rollout"))
@@ -141,18 +153,15 @@ class LocalHfLoraBackend:
         dtype = torch.float16 if config.dtype == "float16" else torch.float32
         if config.model_path is not None:
             source = config.model_path.resolve()
-            weight_path = source / "model.safetensors"
-            if not source.is_dir() or not weight_path.is_file():
-                raise ConfigurationError("model_path must contain model.safetensors")
-            if _file_sha256(weight_path) != config.expected_model_weight_sha256:
-                raise CheckpointIntegrityError("local base-model weight digest mismatch")
+            _verify_local_model_source(config, source)
             tokenizer = transformers.AutoTokenizer.from_pretrained(str(source))
             model = transformers.AutoModelForCausalLM.from_pretrained(
                 str(source),
-                torch_dtype=dtype,
-                attn_implementation="eager",
+                **_model_load_kwargs(transformers, config, dtype),
             )
         else:
+            if config.quantization == "bnb-4bit":
+                raise ConfigurationError("bnb-4bit requires a verified local model_path")
             tokenizer = transformers.AutoTokenizer.from_pretrained(
                 config.model_id,
                 revision=config.model_revision,
@@ -160,8 +169,7 @@ class LocalHfLoraBackend:
             model = transformers.AutoModelForCausalLM.from_pretrained(
                 config.model_id,
                 revision=config.model_revision,
-                torch_dtype=dtype,
-                attn_implementation="eager",
+                **_model_load_kwargs(transformers, config, dtype),
             )
         return cls(config=config, model=model, tokenizer=tokenizer, policy_ids=policy_ids)
 
@@ -191,6 +199,8 @@ class LocalHfLoraBackend:
             self._validate_generation_request(request, state, expected_revision)
             self._model.set_adapter(state.rollout_adapter)
             self._model.eval()
+            if self.config.gradient_checkpointing:
+                self._model.config.use_cache = True
             prompt = self._torch.tensor(
                 [request.prompt_ids], dtype=self._torch.long, device=self.config.device
             )
@@ -221,6 +231,7 @@ class LocalHfLoraBackend:
                     params.get("temperature", 1.0), name="temperature"
                 )
                 generate_kwargs["top_p"] = _as_float(params.get("top_p", 1.0), name="top_p")
+                generate_kwargs["top_k"] = _as_int(params.get("top_k", 0), name="top_k")
             else:
                 generate_kwargs.update(temperature=None, top_p=None, top_k=None)
             with self._torch.inference_mode():
@@ -277,10 +288,20 @@ class LocalHfLoraBackend:
                 raise WeightVersionMismatch("local train adapter is not at expected base version")
             self._model.set_adapter(state.train_adapter)
             self._model.train()
+            if self.config.gradient_checkpointing:
+                self._model.config.use_cache = False
             state.optimizer.zero_grad(set_to_none=True)
 
-            episode_losses: dict[EpisodeId, Any] = {}
             episode_weights: dict[EpisodeId, float] = {}
+            for sample in batch.samples:
+                episode_weights[sample.episode_id] = (
+                    episode_weights.get(sample.episode_id, 0.0) + sample.aggregation_weight
+                )
+            if any(abs(weight - 1.0) > 1e-6 for weight in episode_weights.values()):
+                raise TrainingBatchError("aggregation weights must sum to one per episode")
+
+            episode_count = len(episode_weights)
+            loss_value = 0.0
             ratios: list[float] = []
             kls: list[float] = []
             entropies: list[float] = []
@@ -296,12 +317,12 @@ class LocalHfLoraBackend:
                 active = mask.sum()
                 sequence_mean = (new_log_probs * mask).sum() / active
                 sequence_loss = -sample.advantage * sequence_mean * sample.aggregation_weight
-                episode_losses[sample.episode_id] = (
-                    episode_losses.get(sample.episode_id, 0.0) + sequence_loss
-                )
-                episode_weights[sample.episode_id] = (
-                    episode_weights.get(sample.episode_id, 0.0) + sample.aggregation_weight
-                )
+                scaled_loss = sequence_loss / episode_count
+                if not bool(self._torch.isfinite(scaled_loss).item()):
+                    state.optimizer.zero_grad(set_to_none=True)
+                    raise TrainingBatchError("policy loss is not finite")
+                scaled_loss.backward()
+                loss_value += float(sequence_loss.detach().cpu())
                 old = self._torch.tensor(
                     sample.old_log_probs,
                     dtype=new_log_probs.dtype,
@@ -313,12 +334,7 @@ class LocalHfLoraBackend:
                     float(item) for item in (old - new_log_probs.detach())[mask.bool()].cpu()
                 )
                 entropies.append(float(entropy.detach().cpu()))
-            if any(abs(weight - 1.0) > 1e-6 for weight in episode_weights.values()):
-                raise TrainingBatchError("aggregation weights must sum to one per episode")
-            loss = self._torch.stack(tuple(episode_losses.values())).mean()
-            if not bool(self._torch.isfinite(loss).item()):
-                raise TrainingBatchError("policy loss is not finite")
-            loss.backward()
+            loss_value /= episode_count
             grad_norm = self._gradient_norm(state.train_adapter)
             if not self._adapter_gradients_are_finite(state.train_adapter):
                 state.optimizer.zero_grad(set_to_none=True)
@@ -345,12 +361,12 @@ class LocalHfLoraBackend:
                 trained_version=state.weight,
                 checkpoint=checkpoint,
                 metrics=(
-                    ("loss", float(loss.detach().cpu())),
+                    ("loss", loss_value),
                     ("gradient_norm", grad_norm),
                     ("old_new_ratio_mean", sum(ratios) / len(ratios)),
                     ("approx_kl_mean", sum(kls) / len(kls)),
                     ("entropy_mean", sum(entropies) / len(entropies)),
-                    ("episode_count", float(len(episode_losses))),
+                    ("episode_count", float(episode_count)),
                 ),
             )
             self._updates[batch.batch_id] = (batch.batch_digest, result)
@@ -622,11 +638,19 @@ class LocalHfLoraBackend:
                 "optimizer_step": optimizer_step,
                 "base_model_id": self.config.model_id,
                 "base_model_revision": self.config.model_revision,
-                "base_model_weight_sha256": self.config.expected_model_weight_sha256,
+                "base_model_identity_kind": self.config.base_model_identity_kind,
+                "base_model_identity": self.config.base_model_identity,
                 "tokenizer_revision": self.prompt_encoder.tokenizer_revision,
                 "prompt_template_revision": self.prompt_encoder.prompt_template_revision,
                 "config": self.config.model_dump(
-                    mode="json", exclude={"artifact_dir", "model_path"}
+                    mode="json",
+                    exclude={
+                        "artifact_dir",
+                        "model_path",
+                        "model_manifest_path",
+                        "expected_model_weight_sha256",
+                        "expected_model_manifest_digest",
+                    },
                 ),
                 "adapter_digest": adapter_digest,
                 "file_digests": file_digests,
@@ -680,6 +704,8 @@ class LocalHfLoraBackend:
         if (
             manifest.get("base_model_id") != self.config.model_id
             or manifest.get("base_model_revision") != self.config.model_revision
+            or manifest.get("base_model_identity_kind") != self.config.base_model_identity_kind
+            or manifest.get("base_model_identity") != self.config.base_model_identity
         ):
             raise CheckpointIntegrityError("checkpoint base model does not match runtime")
         if manifest["file_digests"].get("optimizer.pt") != checkpoint.optimizer_state_digest:
@@ -705,6 +731,56 @@ def _local_dependencies() -> tuple[Any, Any]:
             "LocalHF dependencies are unavailable; use an isolated environment with the local extra"
         ) from exc
     return torch, peft
+
+
+def _verify_local_model_source(config: LocalLoraConfig, source: Path) -> None:
+    if not source.is_dir():
+        raise ConfigurationError("model_path must be a directory")
+    if config.model_manifest_path is not None:
+        try:
+            manifest = load_asset_manifest(config.model_manifest_path)
+            if (
+                manifest.repo_type != "model"
+                or manifest.repo_id != config.model_id
+                or manifest.revision != config.model_revision
+                or manifest.manifest_digest != config.expected_model_manifest_digest
+            ):
+                raise CheckpointIntegrityError(
+                    "local model manifest identity does not match configuration"
+                )
+            AssetPreparer().verify_copy(manifest, source)
+        except AssetPreparationError as exc:
+            raise CheckpointIntegrityError("local model manifest verification failed") from exc
+        return
+
+    weight_path = source / "model.safetensors"
+    if not weight_path.is_file():
+        raise ConfigurationError(
+            "model_path must contain model.safetensors or use a trusted model manifest"
+        )
+    if _file_sha256(weight_path) != config.expected_model_weight_sha256:
+        raise CheckpointIntegrityError("local base-model weight digest mismatch")
+
+
+def _model_load_kwargs(
+    transformers: Any,
+    config: LocalLoraConfig,
+    dtype: Any,
+) -> dict[str, object]:
+    kwargs: dict[str, object] = {
+        "torch_dtype": dtype,
+        "attn_implementation": "eager",
+        "low_cpu_mem_usage": True,
+    }
+    if config.quantization == "bnb-4bit":
+        kwargs["quantization_config"] = transformers.BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_compute_dtype=dtype,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_use_double_quant=True,
+        )
+        kwargs["device_map"] = {"": config.device}
+    return kwargs
 
 
 def _adapter_name(policy_id: PolicyId, kind: str) -> str:

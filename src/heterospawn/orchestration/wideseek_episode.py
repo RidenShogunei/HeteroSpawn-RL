@@ -117,6 +117,9 @@ class WideSeekEpisodeOrchestrator:
         max_tools_per_sub_turn: int = 3,
         main_repair_attempts: int = 1,
         sub_repair_attempts: int = 1,
+        max_search_message_results: int = 3,
+        max_search_content_characters: int = 3000,
+        max_access_characters: int = 2000,
         sampling_params: tuple[tuple[str, JsonScalar], ...] = (),
     ) -> None:
         if max_concurrency < 1:
@@ -133,6 +136,10 @@ class WideSeekEpisodeOrchestrator:
             raise ValueError("max_tools_per_sub_turn must be in 1..3")
         if main_repair_attempts < 0 or sub_repair_attempts < 0:
             raise ValueError("repair attempts cannot be negative")
+        if max_search_message_results < 1:
+            raise ValueError("model-visible search result count must be positive")
+        if max_search_content_characters < 1 or max_access_characters < 1:
+            raise ValueError("tool message character budgets must be positive")
         for role in ("main", "sub"):
             binding = registry.binding(role)
             service = policy_services.get(role)
@@ -153,7 +160,18 @@ class WideSeekEpisodeOrchestrator:
         self._max_tools_per_sub_turn = max_tools_per_sub_turn
         self._main_repair_attempts = main_repair_attempts
         self._sub_repair_attempts = sub_repair_attempts
+        self._max_search_message_results = max_search_message_results
+        self._max_search_content_characters = max_search_content_characters
+        self._max_access_characters = max_access_characters
         self._sampling_params = sampling_params
+        self.prompt_revision = canonical_digest(
+            {
+                "base_revision": WIDESEEK_PROMPT_REVISION,
+                "max_search_message_results": max_search_message_results,
+                "max_search_content_characters": max_search_content_characters,
+                "max_access_characters": max_access_characters,
+            }
+        )
 
     async def run(
         self,
@@ -371,6 +389,8 @@ class WideSeekEpisodeOrchestrator:
             error_code: str | None = None
             try:
                 candidate = parse_main_turn(content)
+                if result.stop_reason == "length" and isinstance(candidate, MainAnswerTurn):
+                    raise InvalidActionError("truncated Main output cannot be ANSWER")
                 if isinstance(candidate, MainSpawnTurn):
                     if not allow_spawn:
                         raise InvalidActionError("last Main round must answer")
@@ -495,6 +515,10 @@ class WideSeekEpisodeOrchestrator:
                     model_steps.append(step)
                     try:
                         candidate = parse_sub_turn(content)
+                        if result.stop_reason == "length" and isinstance(candidate, SubSummaryTurn):
+                            raise InvalidActionError(
+                                "truncated Sub output cannot be an evidence summary"
+                            )
                         if (
                             isinstance(candidate, SubToolsTurn)
                             and len(candidate.calls) > self._max_tools_per_sub_turn
@@ -751,7 +775,7 @@ class WideSeekEpisodeOrchestrator:
                         "request_index": request_index,
                         "tool": tool_name,
                         "status": "success",
-                        "results": [item.model_dump(mode="json") for item in search_result.results],
+                        "results": self._search_message_results(search_result),
                     }
                 else:
                     access_result = await self._tools.access(
@@ -759,6 +783,7 @@ class WideSeekEpisodeOrchestrator:
                             request_id=request_id,
                             url=call.arguments.url,
                             info_to_extract=call.arguments.info_to_extract,
+                            max_characters=self._max_access_characters,
                         )
                     )
                     self._validate_access_response(access_result, request_id, call.arguments.url)
@@ -994,10 +1019,29 @@ class WideSeekEpisodeOrchestrator:
             budget=await ledger.snapshot(),
             search_provider_revision=provider_revision,
             search_response_digest=response_digest,
-            prompt_revision=WIDESEEK_PROMPT_REVISION,
+            prompt_revision=self.prompt_revision,
             tool_schema_revision=WIDESEEK_TOOL_SCHEMA_REVISION,
             parser_revision=WIDESEEK_PARSER_REVISION,
         )
+
+    def _search_message_results(self, result: SearchResponse) -> list[dict[str, object]]:
+        visible_results = result.results[: self._max_search_message_results]
+        if not visible_results:
+            return []
+        per_result_budget = max(
+            1,
+            self._max_search_content_characters // len(visible_results),
+        )
+        return [
+            {
+                "title": item.title,
+                "url": item.url,
+                "content": item.content[:per_result_budget],
+                "content_truncated": len(item.content) > per_result_budget,
+                "score": item.score,
+            }
+            for item in visible_results
+        ]
 
     def _validate_revisions(
         self,

@@ -110,3 +110,24 @@ This file records milestone-level events. Fine-grained work remains in GitHub is
 - Made the offline launcher own Qdrant and retrieval as dedicated process groups after full-scale
   teardown exposed orphaned E5 workers. Bounded group termination passed a parent/child probe, and
   the acceptance host returned all GPUs to their idle state.
+
+## 2026-07-24
+
+- Accepted ADR-0005: keep Qwen2.5-0.5B as the inexpensive contract model and use pinned
+  Qwen3-4B QLoRA as the research-scale policy profile on 11 GB Turing GPUs.
+- Added full multi-shard model-manifest verification, NF4 QLoRA loading, gradient checkpointing,
+  and manifest-based checkpoint identity. The real independent Main/Sub contract passed at
+  4.41 GB peak allocated VRAM.
+- Added raw-policy categorical sampling for non-degenerate same-task rollouts and verified that
+  rollout old log-probs match update-time recomputation. Warped sampling remains explicitly out of
+  contract.
+- Rejected length-truncated Main answers and Sub summaries, disabled Qwen3 thinking for the
+  bounded 4096-token profile, and versioned deterministic model-visible Search/Access budgets.
+- Decoupled the retrieval-service Python runtime from the QLoRA environment in the crash-clean
+  offline launcher.
+- Reworked LocalHF episode-balanced optimization to backward one sequence at a time, releasing
+  each graph while preserving the exact batch gradient.
+- Passed a real Qwen3-4B shared WideSeek cycle on one width task with two rollouts: 3 spawned Subs,
+  10 real tool outcomes, 18 trainable sequences, non-degenerate advantages, non-zero gradient,
+  adapter update, checkpoint/sync, atomic phase commit, and restore. Peak allocated VRAM was
+  7.29 GB and the longest complete training sequence was 1,985 tokens.

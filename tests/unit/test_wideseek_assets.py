@@ -21,6 +21,8 @@ from heterospawn.search.wideseek_local import (
     WIDESEEK_E5_MANIFEST_DIGEST,
 )
 
+QWEN3_4B_MANIFEST_DIGEST = "7d1f0f5002a45efc43d4800d460e1e11d9849dee17a587a34d003709c5e57ce9"
+
 
 def _manifest(content: bytes = b"trusted") -> HuggingFaceAssetManifest:
     return create_manifest(
@@ -176,6 +178,22 @@ def test_committed_offline_manifests_match_environment_identity() -> None:
     assert sum(file.size for file in retriever.files) == 438_900_149
 
 
+def test_committed_qwen3_4b_manifest_pins_all_model_shards() -> None:
+    root = Path(__file__).parents[2]
+    model = load_asset_manifest(root / "manifests/qwen3-4b.json")
+
+    assert model.repo_id == "Qwen/Qwen3-4B"
+    assert model.revision == "1cfa9a7208912126459214e8b04321603b3df60c"
+    assert model.manifest_digest == QWEN3_4B_MANIFEST_DIGEST
+    assert len(model.files) == 13
+    assert sum(file.size for file in model.files) == 8_060_926_626
+    assert tuple(file.path for file in model.files if file.path.endswith(".safetensors")) == (
+        "model-00001-of-00003.safetensors",
+        "model-00002-of-00003.safetensors",
+        "model-00003-of-00003.safetensors",
+    )
+
+
 def test_offline_launcher_uses_project_absolute_manifest_paths() -> None:
     root = Path(__file__).parents[2]
     launcher = (root / "scripts/start_wideseek_offline.sh").read_text(encoding="utf-8")
@@ -189,6 +207,7 @@ def test_offline_launcher_cleans_complete_service_process_groups() -> None:
     launcher = (root / "scripts/start_wideseek_offline.sh").read_text(encoding="utf-8")
 
     assert "setsid env QDRANT__SERVICE__HTTP_PORT" in launcher
-    assert 'setsid python -u "$retrieval_server"' in launcher
+    assert 'retrieval_python="${HETEROSPAWN_RETRIEVAL_PYTHON:-python}"' in launcher
+    assert 'setsid "$retrieval_python" -u "$retrieval_server"' in launcher
     assert 'kill -TERM -- "-$leader"' in launcher
     assert 'kill -KILL -- "-$leader"' in launcher
