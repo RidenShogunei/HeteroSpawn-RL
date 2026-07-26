@@ -65,20 +65,42 @@ from heterospawn.search.base import (
 from heterospawn.training.base import PolicyService
 from heterospawn.training.registry import PolicyRegistry
 
-_MAIN_SYSTEM_PROMPT = """You are the lead researcher. Use the subtask tool only when delegation is
-needed. You may emit 1-4 subtask tool calls in one turn. When sufficient evidence is available,
-return the final answer directly with no tool call. Never invent tool results."""
+WIDESEEK_MAIN_SYSTEM_PROMPT = (
+    "You are the lead researcher. Use the subtask tool only when delegation is\n"
+    "needed. You may emit 1-4 subtask tool calls in one turn. When sufficient evidence is "
+    "available,\n"
+    "return the final answer directly with no tool call. Never invent tool results."
+)
 
-_SUB_SYSTEM_PROMPT = """You are a research worker. Use search to discover sources and access to read
-only URLs returned by your own earlier searches. You may emit at most three tool calls in one turn.
-When the subtask is complete, return a concise evidence summary directly with no tool call."""
+WIDESEEK_SUB_SYSTEM_PROMPT = (
+    "You are a research worker. Use search to discover sources and access to read\n"
+    "only URLs returned by your own earlier searches. You may emit at most three tool calls in one "
+    "turn.\nWhen the subtask is complete, return a concise evidence summary directly with no tool "
+    "call."
+)
 WIDESEEK_PROMPT_REVISION = canonical_digest(
     {
         "upstream_revision": WIDESEEK_UPSTREAM_REVISION,
-        "main_system_prompt": _MAIN_SYSTEM_PROMPT,
-        "sub_system_prompt": _SUB_SYSTEM_PROMPT,
+        "main_system_prompt": WIDESEEK_MAIN_SYSTEM_PROMPT,
+        "sub_system_prompt": WIDESEEK_SUB_SYSTEM_PROMPT,
     }
 )
+
+
+def wideseek_main_system_prompt(
+    *,
+    max_main_rounds: int,
+    max_spawn_per_round: int,
+    max_spawn_per_episode: int,
+) -> str:
+    """Build the shared Main prompt used by rollout and supervised construction."""
+
+    return (
+        f"{WIDESEEK_MAIN_SYSTEM_PROMPT}\n"
+        f"Episode limits: {max_main_rounds} Main turns, "
+        f"{max_spawn_per_round} workers per spawn round, "
+        f"{max_spawn_per_episode} workers total."
+    )
 
 
 @dataclass(frozen=True)
@@ -461,7 +483,7 @@ class WideSeekEpisodeOrchestrator:
         codec = self._codecs["sub"]
         expected_revision = revisions[service.policy_id]
         messages: tuple[Message, ...] = (
-            Message(role="system", content=_SUB_SYSTEM_PROMPT),
+            Message(role="system", content=WIDESEEK_SUB_SYSTEM_PROMPT),
             Message(role="user", content=subtask),
         )
         known_urls: dict[str, StepId] = {}
@@ -1103,11 +1125,10 @@ class WideSeekEpisodeOrchestrator:
 
     @property
     def _main_prompt(self) -> str:
-        return (
-            f"{_MAIN_SYSTEM_PROMPT}\n"
-            f"Episode limits: {self._max_main_rounds} Main turns, "
-            f"{self._max_spawn_per_round} workers per spawn round, "
-            f"{self._max_spawn_per_episode} workers total."
+        return wideseek_main_system_prompt(
+            max_main_rounds=self._max_main_rounds,
+            max_spawn_per_round=self._max_spawn_per_round,
+            max_spawn_per_episode=self._max_spawn_per_episode,
         )
 
     @staticmethod
