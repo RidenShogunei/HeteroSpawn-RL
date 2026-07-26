@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
+from heterospawn.backends.local_hf import load_local_checkpoint_ref
 from heterospawn.backends.local_hf.config import LocalLoraConfig
 from heterospawn.cli import _local_lora_config, build_parser
+from heterospawn.domain.training import canonical_digest
+from heterospawn.errors import CheckpointIntegrityError
 
 
 def test_model_manifest_identity_is_complete_and_preferred() -> None:
@@ -91,6 +95,51 @@ def test_wideseek_train_cli_exposes_sampled_rollout_controls() -> None:
     assert args.do_sample is True
 
 
+def test_local_checkpoint_ref_is_reconstructed_from_manifest(tmp_path: Path) -> None:
+    checkpoint_dir = tmp_path / "shared_step-7"
+    checkpoint_dir.mkdir()
+    payload = {
+        "schema_version": 1,
+        "policy_id": "shared",
+        "optimizer_step": 7,
+        "file_digests": {"optimizer.pt": "optimizer-digest"},
+    }
+    digest = canonical_digest(payload)
+    (checkpoint_dir / "manifest.json").write_text(
+        json.dumps({**payload, "checkpoint_digest": digest}),
+        encoding="utf-8",
+    )
+
+    checkpoint = load_local_checkpoint_ref(checkpoint_dir)
+
+    assert checkpoint.checkpoint_id == f"shared:step-7:{digest[:12]}"
+    assert checkpoint.policy_id == "shared"
+    assert checkpoint.weight_version.optimizer_step == 7
+    assert checkpoint.weight_version.checkpoint_digest == digest
+    assert checkpoint.optimizer_state_digest == "optimizer-digest"
+    assert checkpoint.uri == checkpoint_dir.resolve().as_uri()
+
+
+def test_local_checkpoint_ref_rejects_manifest_identity_mismatch(tmp_path: Path) -> None:
+    checkpoint_dir = tmp_path / "checkpoint"
+    checkpoint_dir.mkdir()
+    (checkpoint_dir / "manifest.json").write_text(
+        """
+        {
+          "schema_version": 1,
+          "policy_id": "shared",
+          "optimizer_step": 7,
+          "file_digests": {"optimizer.pt": "optimizer-digest"},
+          "checkpoint_digest": "wrong"
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    with pytest.raises(CheckpointIntegrityError, match="manifest digest mismatch"):
+        load_local_checkpoint_ref(checkpoint_dir)
+
+
 def test_wideseek_sft_smoke_defaults_to_qwen3_shared_update() -> None:
     args = build_parser().parse_args(
         [
@@ -123,3 +172,20 @@ def test_wideseek_multistep_sft_separates_training_and_rollout_limits() -> None:
     assert args.epochs == 1
     assert args.training_max_sequence_length == 2304
     assert args.max_sequence_length == 4096
+
+
+def test_wideseek_compliance_exposes_checkpoint_only_rollout() -> None:
+    args = build_parser().parse_args(
+        [
+            "wideseek-compliance-baseline",
+            "--model-path",
+            "model",
+            "--checkpoint-dir",
+            "checkpoint",
+            "--max-sequence-length",
+            "8192",
+        ]
+    )
+
+    assert args.checkpoint_dir == Path("checkpoint")
+    assert args.max_sequence_length == 8192

@@ -182,3 +182,10 @@ This file records milestone-level events. Fine-grained work remains in GitHub is
   from 1 to 4 non-zero outcomes, but legal spawn fell from 16 to 6 episodes. The final checkpoint
   fails the spawn-retention gate; intermediate-checkpoint evaluation is selected before any
   additional SFT exposure or direct-RL scaling.
+- Added a manifest-verified checkpoint-only compliance path and aggregate prompt/response token
+  length telemetry without persisting token arrays or model text.
+- Restored the exact shared step-48 checkpoint and passed the fixed profile at an 8,192-token
+  limit on one RTX 2080 Ti. All rollout contracts passed, but behavior metrics exactly matched
+  the 4,096-token run because the longest actual prompt-plus-response sequence was only 2,416
+  tokens. The six length-truncated episodes hit the unchanged 512-token generation limit, so
+  larger total context or multi-GPU context scaling is not the next bottleneck.

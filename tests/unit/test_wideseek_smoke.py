@@ -216,6 +216,10 @@ async def test_compliance_baseline_is_rollout_only_and_reference_safe(
     assert report["summary"]["format_ok_rate"] == 0.0
     assert report["summary"]["nonzero_outcome_rate"] == 0.0
     assert report["summary"]["tool_calls"] == 2
+    assert report["summary"]["prompt_token_counts"]["count"] == report["summary"]["model_steps"]
+    assert report["summary"]["response_token_counts"]["count"] == report["summary"]["model_steps"]
+    assert report["summary"]["sequence_token_counts"]["max"] > 0
+    assert report["max_sequence_length"] == 1024
     assert all(report["checks"].values())
     persisted = report_path.read_text(encoding="utf-8")
     assert "PRIVATE_" not in persisted
