@@ -182,6 +182,21 @@ heterospawn wideseek-train-smoke \
   --report "$HOME/heterospawn-runtime/results/independent/report.json"
 ```
 
+An audited shared-policy SFT checkpoint can initialize a bounded RL cycle with:
+
+```bash
+  --checkpoint-dir "$HOME/heterospawn-runtime/results/sft/checkpoints/shared_step-N_<digest>" \
+  --require-learning-signal
+```
+
+The initialization path applies the same manifest, base-model, and per-file verification as
+checkpoint-only compliance, restores optimizer/RNG state, and explicitly synchronizes rollout
+weights before the first system rollout. The initial `WeightVersion` is bound into the config and
+phase-transaction identities. `--require-learning-signal` writes the safe report and then fails
+the command unless at least one reward group is non-degenerate, advantages are non-zero, the
+gradient is finite and non-zero, and the target adapter changes. One checkpoint directory applies
+only to `--topology shared`; independent initialization needs an explicit policy-fork contract.
+
 For the Qwen3-4B research profile, run the training command from an environment installed with
 `.[qlora]` and replace the model arguments with:
 

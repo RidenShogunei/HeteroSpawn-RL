@@ -675,7 +675,9 @@ async def run_wideseek_train_smoke(
     judge_mode: JudgeMode,
     transaction_dir: Path,
     report_path: Path,
+    checkpoint_dir: Path | None = None,
     require_sub_update: bool = False,
+    require_learning_signal: bool = False,
     tool_service: WideSeekLocalToolService | None = None,
     do_sample: bool = False,
     max_search_message_results: int = 3,
@@ -686,6 +688,8 @@ async def run_wideseek_train_smoke(
 
     if rollouts_per_task < 2:
         raise ValueError("WideSeek train smoke requires at least two rollouts per task")
+    if checkpoint_dir is not None and topology != "shared":
+        raise ValueError("one checkpoint directory can initialize only the shared topology")
     manifest = load_asset_manifest(data_manifest_path)
     filename = f"{split}.jsonl"
     expected = next((file for file in manifest.files if file.path == filename), None)
@@ -708,6 +712,23 @@ async def run_wideseek_train_smoke(
         (PolicyId("shared"),) if topology == "shared" else (PolicyId("main"), PolicyId("sub"))
     )
     backend = LocalHfLoraBackend.from_pretrained(config=local_config, policy_ids=policy_ids)
+    loaded_checkpoint = None
+    if checkpoint_dir is not None:
+        checkpoint = load_local_checkpoint_ref(checkpoint_dir)
+        if checkpoint.policy_id != policy_ids[0]:
+            raise ValueError("checkpoint policy does not match the shared training policy")
+        restored_version = await backend.restore_checkpoint(checkpoint)
+        synced_revision = await backend.sync_rollout_weights(
+            checkpoint.policy_id,
+            restored_version,
+        )
+        loaded_checkpoint = {
+            "checkpoint_id": str(checkpoint.checkpoint_id),
+            "policy_id": str(checkpoint.policy_id),
+            "optimizer_step": restored_version.optimizer_step,
+            "checkpoint_digest": restored_version.checkpoint_digest,
+            "rollout_replica_set_revision": synced_revision.replica_set_revision,
+        }
     main_id = policy_ids[0]
     sub_id = main_id if topology == "shared" else PolicyId("sub")
     registry = PolicyRegistry(
@@ -770,6 +791,10 @@ async def run_wideseek_train_smoke(
         max_access_characters=max_access_characters,
         sampling_params=sampling_params,
     )
+    initial_weight_versions = {
+        str(policy_id): backend.rollout_revision(policy_id).weight_version.model_dump(mode="json")
+        for policy_id in policy_ids
+    }
     config_digest = canonical_digest(
         {
             "topology": topology,
@@ -781,6 +806,7 @@ async def run_wideseek_train_smoke(
             "prompt_revision": orchestrator.prompt_revision,
             "environment_revision": tools.provider_revision,
             "reward_revision": reward.revision,
+            "initial_weight_versions": initial_weight_versions,
         }
     )
     context = PhaseTransactionContext(
@@ -859,6 +885,28 @@ async def run_wideseek_train_smoke(
         )
     final_revisions = registry.snapshot()
     final_hashes = {str(policy_id): backend.adapter_hash(policy_id) for policy_id in policy_ids}
+    adapter_changed = {
+        policy_id: initial_hashes[policy_id] != final_hashes[policy_id]
+        for policy_id in initial_hashes
+    }
+    gradient_norms = tuple(
+        float(dict(update.metrics).get("gradient_norm", 0.0)) for update in updates
+    )
+    learning_signal_checks = {
+        "nondegenerate_reward_group": any(
+            phase.degenerate_groups < len(phase.groups) for phase in result.phases
+        ),
+        "nonzero_advantages": any(
+            advantage != 0.0
+            for phase in result.phases
+            for group in phase.groups
+            for _, advantage in group.advantages.advantages
+        ),
+        "finite_nonzero_gradient": any(
+            math.isfinite(gradient_norm) and gradient_norm > 0.0 for gradient_norm in gradient_norms
+        ),
+        "target_adapter_changed": any(adapter_changed.values()),
+    }
     phase_reports = [
         {
             "phase": phase.phase,
@@ -875,6 +923,22 @@ async def run_wideseek_train_smoke(
                 len(trace.tool_outcomes) for group in phase.groups for trace in group.traces
             ),
             "degenerate_groups": phase.degenerate_groups,
+            "nonzero_advantage_episodes": sum(
+                advantage != 0.0
+                for group in phase.groups
+                for _, advantage in group.advantages.advantages
+            ),
+            "reward_groups": [
+                {
+                    "task_id": str(group.task_id),
+                    "reward_mean": group.advantages.reward_mean,
+                    "reward_std": group.advantages.reward_std,
+                    "reward_min": min(reward.total for reward in group.rewards),
+                    "reward_max": max(reward.total for reward in group.rewards),
+                    "degenerate": group.advantages.degenerate,
+                }
+                for group in phase.groups
+            ],
             "batch_digest": phase.batch.batch_digest,
         }
         for phase in result.phases
@@ -887,9 +951,14 @@ async def run_wideseek_train_smoke(
         with torch.cuda.device(local_config.device):
             peak_bytes = int(torch.cuda.max_memory_allocated())
     report: dict[str, Any] = {
-        "schema_revision": "heterospawn-wideseek-train-smoke-v1",
-        "status": "passed",
+        "schema_revision": "heterospawn-wideseek-train-smoke-v2",
+        "status": (
+            "passed"
+            if not require_learning_signal or all(learning_signal_checks.values())
+            else "failed"
+        ),
         "comparable_to_official": False,
+        "learning_signal_required": require_learning_signal,
         "environment_mode": environment_mode,
         "topology": topology,
         "split": split,
@@ -902,6 +971,10 @@ async def run_wideseek_train_smoke(
         "quantization": local_config.quantization,
         "gradient_checkpointing": local_config.gradient_checkpointing,
         "enable_thinking": local_config.enable_thinking,
+        "max_sequence_length": local_config.max_sequence_length,
+        "max_new_tokens": local_config.max_new_tokens,
+        "loaded_checkpoint": loaded_checkpoint,
+        "initial_weight_versions": initial_weight_versions,
         "sampling_params": dict(sampling_params),
         "sampling_logprob_semantics": "raw-policy",
         "tool_message_budgets": {
@@ -927,11 +1000,9 @@ async def run_wideseek_train_smoke(
             "environment_bound_to_transactions": all(
                 commit.input_digest for commit in result.phase_commits
             ),
+            "learning_signal": learning_signal_checks,
         },
-        "adapter_changed": {
-            policy_id: initial_hashes[policy_id] != final_hashes[policy_id]
-            for policy_id in initial_hashes
-        },
+        "adapter_changed": adapter_changed,
         "versions": {
             "initial": [
                 [str(policy_id), revision.model_dump(mode="json")]
@@ -965,6 +1036,11 @@ async def run_wideseek_train_smoke(
     if not exact_round_trip or not all(restored.values()):
         raise RuntimeError("WideSeek train smoke failed exact trajectory or restore validation")
     await asyncio.to_thread(_write_report, report_path, report)
+    if require_learning_signal and not all(learning_signal_checks.values()):
+        failed = sorted(name for name, passed in learning_signal_checks.items() if not passed)
+        raise RuntimeError(
+            f"WideSeek train smoke lacked required learning signal: {', '.join(failed)}"
+        )
     return report
 
 

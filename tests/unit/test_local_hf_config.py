@@ -95,6 +95,28 @@ def test_wideseek_train_cli_exposes_sampled_rollout_controls() -> None:
     assert args.do_sample is True
 
 
+def test_wideseek_train_cli_exposes_shared_checkpoint_initialization() -> None:
+    args = build_parser().parse_args(
+        [
+            "wideseek-train-smoke",
+            "--topology",
+            "shared",
+            "--model-path",
+            "model",
+            "--checkpoint-dir",
+            "sft-checkpoint",
+            "--max-new-tokens",
+            "1024",
+            "--require-learning-signal",
+        ]
+    )
+
+    assert args.checkpoint_dir == Path("sft-checkpoint")
+    assert args.max_sequence_length == 4096
+    assert args.max_new_tokens == 1024
+    assert args.require_learning_signal is True
+
+
 def test_local_checkpoint_ref_is_reconstructed_from_manifest(tmp_path: Path) -> None:
     checkpoint_dir = tmp_path / "shared_step-7"
     checkpoint_dir.mkdir()

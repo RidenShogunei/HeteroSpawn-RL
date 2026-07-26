@@ -622,6 +622,14 @@ def build_parser() -> argparse.ArgumentParser:
     wideseek_train.add_argument("--max-sequence-length", type=int, default=4096)
     wideseek_train.add_argument("--max-new-tokens", type=int, default=512)
     wideseek_train.add_argument(
+        "--checkpoint-dir",
+        type=Path,
+        help=(
+            "restore and explicitly sync one verified shared-policy LocalHF checkpoint "
+            "before the RL cycle"
+        ),
+    )
+    wideseek_train.add_argument(
         "--do-sample",
         action="store_true",
         help="sample from the raw policy so same-task reward normalization can be non-degenerate",
@@ -643,6 +651,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--require-sub-update",
         action="store_true",
         help="fail instead of accepting an all-zero-spawn independent Sub phase",
+    )
+    wideseek_train.add_argument(
+        "--require-learning-signal",
+        action="store_true",
+        help=(
+            "fail after writing the report unless reward variance, non-zero advantages, "
+            "a finite non-zero gradient, and an adapter change are all observed"
+        ),
     )
     wideseek_train.add_argument(
         "--artifact-dir",
@@ -984,6 +1000,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise SystemExit("--allow-model-download is required when --model-path is omitted")
         if args.judge == "minimax-development" and not args.allow_network:
             raise SystemExit("--allow-network is required for MiniMax development Judge calls")
+        if args.checkpoint_dir is not None and args.topology != "shared":
+            raise SystemExit("--checkpoint-dir currently requires --topology shared")
         from heterospawn.training.wideseek_smoke import run_wideseek_train_smoke
 
         report = asyncio.run(
@@ -1008,7 +1026,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 judge_mode=args.judge,
                 transaction_dir=args.transaction_dir,
                 report_path=args.report,
+                checkpoint_dir=args.checkpoint_dir,
                 require_sub_update=args.require_sub_update,
+                require_learning_signal=args.require_learning_signal,
                 do_sample=args.do_sample,
                 max_search_message_results=args.max_search_message_results,
                 max_search_content_characters=args.max_search_content_characters,
