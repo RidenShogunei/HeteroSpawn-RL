@@ -80,4 +80,3 @@ contract and make later restore and audit records ambiguous.
   - both phase commits restore under their independent policy identities;
   - exact token/log-probability round-trip and environment revision checks remain true.
 - The result is a systems validation, not a benchmark-quality or reward-improvement claim.
-
