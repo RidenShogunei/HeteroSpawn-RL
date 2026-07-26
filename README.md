@@ -110,6 +110,10 @@ The SFT dry run constructs only post-evidence Main final-answer and Sub summary 
 memory; it does not train a model or supervise spawn/Search/Access choices. See the
 [warm-start runbook](docs/runbooks/wideseek-sft-warm-start.md).
 
+The opt-in `wideseek-sft-smoke` command uses the isolated LocalHF QLoRA environment to execute one
+shared-policy supervised update, checkpoint, sync, stale-revision rejection, and replacement
+restore. It is a contract smoke, not a benchmark or a completed warm-start experiment.
+
 The complete offline environment additionally uses the pinned 156 GB Wiki-2018/Qdrant corpus and
 E5-base-v2. Its Linux launcher verifies every source file, starts a mutable Qdrant deployment and
 the pinned upstream retrieval server, then runs:

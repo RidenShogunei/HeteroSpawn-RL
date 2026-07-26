@@ -89,3 +89,18 @@ def test_wideseek_train_cli_exposes_sampled_rollout_controls() -> None:
     )
 
     assert args.do_sample is True
+
+
+def test_wideseek_sft_smoke_defaults_to_qwen3_shared_update() -> None:
+    args = build_parser().parse_args(
+        [
+            "wideseek-sft-smoke",
+            "--model-path",
+            "model",
+        ]
+    )
+
+    assert args.model_profile == "qwen3-4b"
+    assert args.task_indices is None
+    assert args.max_sequence_length == 4096
+    assert args.max_workers == 4
