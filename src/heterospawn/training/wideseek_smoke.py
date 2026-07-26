@@ -6,6 +6,7 @@ import asyncio
 import base64
 import importlib
 import json
+import math
 import random
 import statistics
 import time
@@ -15,7 +16,10 @@ from pathlib import Path
 from typing import Any, Literal, Protocol
 
 from heterospawn.assets import load_asset_manifest
-from heterospawn.backends.local_hf.backend import LocalHfLoraBackend
+from heterospawn.backends.local_hf.backend import (
+    LocalHfLoraBackend,
+    load_local_checkpoint_ref,
+)
 from heterospawn.backends.local_hf.config import LocalLoraConfig
 from heterospawn.benchmarks.wideseek import (
     WideSeekDataset,
@@ -286,6 +290,7 @@ async def run_wideseek_compliance_baseline(
     qdrant_url: str,
     local_config: LocalLoraConfig,
     report_path: Path,
+    checkpoint_dir: Path | None = None,
     tool_service: WideSeekLocalToolService | None = None,
     backend: _ComplianceBackend | None = None,
     do_sample: bool = True,
@@ -299,6 +304,10 @@ async def run_wideseek_compliance_baseline(
         raise ValueError("compliance task selection must be non-empty and unique")
     if rollouts_per_task < 1:
         raise ValueError("compliance baseline requires at least one rollout per task")
+    if checkpoint_dir is not None and backend is not None:
+        raise ValueError("checkpoint_dir cannot be combined with an injected backend")
+    if checkpoint_dir is not None and topology != "shared":
+        raise ValueError("one checkpoint directory can restore only the shared topology")
 
     manifest = load_asset_manifest(data_manifest_path)
     expected_by_split = {
@@ -337,10 +346,27 @@ async def run_wideseek_compliance_baseline(
     policy_ids = (
         (PolicyId("shared"),) if topology == "shared" else (PolicyId("main"), PolicyId("sub"))
     )
-    active_backend = backend or LocalHfLoraBackend.from_pretrained(
-        config=local_config,
-        policy_ids=policy_ids,
-    )
+    loaded_checkpoint = None
+    if backend is None:
+        local_backend = LocalHfLoraBackend.from_pretrained(
+            config=local_config,
+            policy_ids=policy_ids,
+        )
+        if checkpoint_dir is not None:
+            checkpoint = load_local_checkpoint_ref(checkpoint_dir)
+            if checkpoint.policy_id != policy_ids[0]:
+                raise ValueError("checkpoint policy does not match the shared compliance policy")
+            restored_version = await local_backend.restore_checkpoint(checkpoint)
+            await local_backend.sync_rollout_weights(checkpoint.policy_id, restored_version)
+            loaded_checkpoint = {
+                "checkpoint_id": str(checkpoint.checkpoint_id),
+                "policy_id": str(checkpoint.policy_id),
+                "optimizer_step": restored_version.optimizer_step,
+                "checkpoint_digest": restored_version.checkpoint_digest,
+            }
+        active_backend: _ComplianceBackend = local_backend
+    else:
+        active_backend = backend
     main_id = policy_ids[0]
     sub_id = main_id if topology == "shared" else PolicyId("sub")
     registry = PolicyRegistry(
@@ -466,7 +492,7 @@ async def run_wideseek_compliance_baseline(
         for split in requested_splits
     }
     report: dict[str, Any] = {
-        "schema_revision": "heterospawn-wideseek-compliance-v1",
+        "schema_revision": "heterospawn-wideseek-compliance-v2",
         "status": "passed",
         "comparable_to_official": False,
         "optimizer_updates": 0,
@@ -483,7 +509,14 @@ async def run_wideseek_compliance_baseline(
         "quantization": local_config.quantization,
         "gradient_checkpointing": local_config.gradient_checkpointing,
         "enable_thinking": local_config.enable_thinking,
+        "max_sequence_length": local_config.max_sequence_length,
+        "max_new_tokens": local_config.max_new_tokens,
         "seed": local_config.seed,
+        "loaded_checkpoint": loaded_checkpoint,
+        "policy_weight_versions": {
+            str(policy_id): revision.weight_version.model_dump(mode="json")
+            for policy_id, revision in initial_backend_revisions
+        },
         "sampling_params": dict(sampling_params),
         "sampling_logprob_semantics": "raw-policy",
         "tool_message_budgets": {
@@ -529,6 +562,8 @@ def _compliance_record(
     tool_counts = Counter(
         f"{outcome.tool_name}:{outcome.status}" for outcome in trace.tool_outcomes
     )
+    prompt_token_counts = [len(step.prompt_ids) for step in trace.model_steps]
+    response_token_counts = [len(step.response_ids) for step in trace.model_steps]
     return {
         "split": split,
         "task_index": task_index,
@@ -548,6 +583,16 @@ def _compliance_record(
         "tool_counts": dict(sorted(tool_counts.items())),
         "stop_reasons": dict(sorted(stop_reasons.items())),
         "length_truncated": stop_reasons["length"] > 0,
+        "prompt_token_counts": prompt_token_counts,
+        "response_token_counts": response_token_counts,
+        "sequence_token_counts": [
+            prompt + response
+            for prompt, response in zip(
+                prompt_token_counts,
+                response_token_counts,
+                strict=True,
+            )
+        ],
         "exact_token_logprob_alignment": all(
             len(step.response_ids) == len(step.response_log_probs) for step in trace.model_steps
         ),
@@ -564,6 +609,13 @@ def _summarize_compliance(records: list[dict[str, Any]]) -> dict[str, Any]:
     failures = Counter(
         str(record["failure_code"]) for record in records if record["failure_code"] is not None
     )
+    prompt_tokens = [int(count) for record in records for count in record["prompt_token_counts"]]
+    response_tokens = [
+        int(count) for record in records for count in record["response_token_counts"]
+    ]
+    sequence_tokens = [
+        int(count) for record in records for count in record["sequence_token_counts"]
+    ]
     return {
         "episodes": episodes,
         "success_rate": _rate(record["status"] == "success" for record in records),
@@ -585,6 +637,22 @@ def _summarize_compliance(records: list[dict[str, Any]]) -> dict[str, Any]:
         "tool_calls": sum(
             sum(int(count) for count in record["tool_counts"].values()) for record in records
         ),
+        "prompt_token_counts": _token_count_summary(prompt_tokens),
+        "response_token_counts": _token_count_summary(response_tokens),
+        "sequence_token_counts": _token_count_summary(sequence_tokens),
+    }
+
+
+def _token_count_summary(values: list[int]) -> dict[str, int]:
+    ordered = sorted(values)
+    if not ordered:
+        return {"count": 0, "p50": 0, "p95": 0, "max": 0, "total": 0}
+    return {
+        "count": len(ordered),
+        "p50": ordered[math.ceil(0.50 * len(ordered)) - 1],
+        "p95": ordered[math.ceil(0.95 * len(ordered)) - 1],
+        "max": ordered[-1],
+        "total": sum(ordered),
     }
 
 

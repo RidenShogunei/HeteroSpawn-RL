@@ -853,6 +853,60 @@ class LocalHfLoraBackend:
             raise TrainingBatchError(f"unknown local policy: {policy_id}") from None
 
 
+def load_local_checkpoint_ref(checkpoint_dir: Path) -> CheckpointRef:
+    """Reconstruct a checkpoint reference from a verified LocalHF manifest.
+
+    This validates the manifest identity before model or optimizer state is loaded.
+    ``restore_checkpoint`` performs the remaining base-model and per-file checks.
+    """
+
+    path = checkpoint_dir.resolve()
+    try:
+        manifest = json.loads((path / "manifest.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise CheckpointIntegrityError("checkpoint manifest is unreadable") from exc
+    if not isinstance(manifest, dict) or manifest.get("schema_version") != 1:
+        raise CheckpointIntegrityError("checkpoint manifest schema is unsupported")
+
+    policy_id = manifest.get("policy_id")
+    optimizer_step = manifest.get("optimizer_step")
+    checkpoint_digest = manifest.get("checkpoint_digest")
+    file_digests = manifest.get("file_digests")
+    if not isinstance(policy_id, str) or not policy_id:
+        raise CheckpointIntegrityError("checkpoint manifest policy_id is invalid")
+    if (
+        not isinstance(optimizer_step, int)
+        or isinstance(optimizer_step, bool)
+        or optimizer_step < 0
+    ):
+        raise CheckpointIntegrityError("checkpoint manifest optimizer_step is invalid")
+    if not isinstance(checkpoint_digest, str) or not checkpoint_digest:
+        raise CheckpointIntegrityError("checkpoint manifest digest is invalid")
+    if not isinstance(file_digests, dict):
+        raise CheckpointIntegrityError("checkpoint manifest file_digests is invalid")
+    optimizer_digest = file_digests.get("optimizer.pt")
+    if not isinstance(optimizer_digest, str) or not optimizer_digest:
+        raise CheckpointIntegrityError("checkpoint optimizer digest is missing")
+
+    payload = {key: value for key, value in manifest.items() if key != "checkpoint_digest"}
+    if canonical_digest(payload) != checkpoint_digest:
+        raise CheckpointIntegrityError("checkpoint manifest digest mismatch")
+
+    typed_policy_id = PolicyId(policy_id)
+    weight_version = WeightVersion(
+        policy_id=typed_policy_id,
+        optimizer_step=optimizer_step,
+        checkpoint_digest=checkpoint_digest,
+    )
+    return CheckpointRef(
+        checkpoint_id=CheckpointId(f"{policy_id}:step-{optimizer_step}:{checkpoint_digest[:12]}"),
+        policy_id=typed_policy_id,
+        weight_version=weight_version,
+        uri=path.as_uri(),
+        optimizer_state_digest=optimizer_digest,
+    )
+
+
 def _local_dependencies() -> tuple[Any, Any]:
     try:
         peft = importlib.import_module("peft")

@@ -533,6 +533,14 @@ def build_parser() -> argparse.ArgumentParser:
     wideseek_compliance.add_argument("--max-sequence-length", type=int, default=4096)
     wideseek_compliance.add_argument("--max-new-tokens", type=int, default=512)
     wideseek_compliance.add_argument(
+        "--checkpoint-dir",
+        type=Path,
+        help=(
+            "restore and explicitly sync one verified shared-policy LocalHF checkpoint "
+            "before rollout"
+        ),
+    )
+    wideseek_compliance.add_argument(
         "--do-sample",
         action="store_true",
         help="sample from the raw policy instead of using greedy generation",
@@ -936,6 +944,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "wideseek-compliance-baseline":
         if args.model_path is None and not args.allow_model_download:
             raise SystemExit("--allow-model-download is required when --model-path is omitted")
+        if args.checkpoint_dir is not None and args.topology != "shared":
+            raise SystemExit("--checkpoint-dir currently requires --topology shared")
         from heterospawn.training.wideseek_smoke import (
             WIDESEEK_COMPLIANCE_PROFILE_V1,
             run_wideseek_compliance_baseline,
@@ -960,6 +970,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     max_new_tokens=args.max_new_tokens,
                 ),
                 report_path=args.report,
+                checkpoint_dir=args.checkpoint_dir,
                 do_sample=args.do_sample,
                 max_search_message_results=args.max_search_message_results,
                 max_search_content_characters=args.max_search_content_characters,

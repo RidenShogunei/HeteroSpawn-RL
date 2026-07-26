@@ -128,6 +128,19 @@ and contract checks; prompts, reference answers, retrieved content, token arrays
 text remain absent. The command fails if token/log-prob alignment or stable event ordering fails,
 or if any policy revision or adapter hash changes.
 
+To evaluate an existing shared-policy LocalHF checkpoint without another optimizer update, add:
+
+```bash
+  --checkpoint-dir "$HOME/heterospawn-runtime/results/checkpoints/shared_step-N_<digest>"
+```
+
+The command reconstructs the checkpoint identity from its canonical manifest, verifies the
+checkpoint and base-model files, restores optimizer/RNG state, and explicitly synchronizes the
+rollout adapter. The safe report records the loaded policy, optimizer step, checkpoint digest,
+configured sequence limits, and aggregate prompt/response token-count percentiles. One checkpoint
+directory currently applies only to `--topology shared`; independent Main/Sub evaluation requires
+an explicit two-checkpoint interface rather than an inferred role mapping.
+
 Use repeated `--task split:index` arguments to run an explicitly recorded alternative selection,
 and `--rollouts-per-task` to change the repeat count. Selection changes are reflected in the
 report digest. Treat the result as a readiness diagnostic, not an official benchmark score:
