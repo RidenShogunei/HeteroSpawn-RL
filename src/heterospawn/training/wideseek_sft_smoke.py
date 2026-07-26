@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import gc
+import hashlib
 import importlib
 import importlib.metadata
 import json
@@ -33,14 +34,19 @@ async def run_wideseek_sft_smoke(
     local_config: LocalLoraConfig,
     report_path: Path,
     max_workers: int = 4,
+    compliance_report_path: Path | None = None,
+    service_url: str = "http://127.0.0.1:8000",
+    qdrant_url: str = "http://127.0.0.1:6333",
 ) -> dict[str, Any]:
     """Run one shared-policy SFT update without persisting plaintext examples."""
 
+    if not task_indices or len(set(task_indices)) != len(task_indices):
+        raise ValueError("SFT smoke task indices must be non-empty and unique")
+    if compliance_report_path is not None:
+        _validate_compliance_selection(split, task_indices)
     torch = importlib.import_module("torch")
     if not str(local_config.device).startswith("cuda") or not torch.cuda.is_available():
         raise ConfigurationError("WideSeek SFT smoke requires an available CUDA device")
-    if not task_indices or len(set(task_indices)) != len(task_indices):
-        raise ValueError("SFT smoke task indices must be non-empty and unique")
 
     manifest = load_asset_manifest(data_manifest_path)
     filename = f"{split}.jsonl"
@@ -176,6 +182,36 @@ async def run_wideseek_sft_smoke(
         failed = sorted(name for name, passed in checks.items() if not passed)
         raise RuntimeError(f"WideSeek SFT smoke failed: {', '.join(failed)}")
 
+    compliance: dict[str, Any] | None = None
+    if compliance_report_path is not None:
+        from heterospawn.training.wideseek_smoke import (
+            WIDESEEK_COMPLIANCE_PROFILE_V1,
+            run_wideseek_compliance_baseline,
+        )
+
+        compliance_result = await run_wideseek_compliance_baseline(
+            topology="shared",
+            task_selection=WIDESEEK_COMPLIANCE_PROFILE_V1,
+            rollouts_per_task=1,
+            data_manifest_path=data_manifest_path,
+            data_dir=data_dir,
+            service_url=service_url,
+            qdrant_url=qdrant_url,
+            local_config=local_config,
+            report_path=compliance_report_path,
+            backend=replacement,
+            do_sample=True,
+            max_search_message_results=3,
+            max_search_content_characters=600,
+            max_access_characters=800,
+        )
+        compliance = {
+            "selection_profile": compliance_result["selection_profile"],
+            "summary": compliance_result["summary"],
+            "checks": compliance_result["checks"],
+            "report_digest": _file_sha256(compliance_report_path),
+        }
+
     report: dict[str, Any] = {
         "schema_revision": "heterospawn-wideseek-sft-smoke-v1",
         "status": "passed",
@@ -220,6 +256,7 @@ async def run_wideseek_sft_smoke(
         },
         "metrics": dict(update.metrics),
         "checks": checks,
+        "post_sft_compliance": compliance,
         "report_excludes": [
             "questions",
             "reference_answers",
@@ -284,3 +321,29 @@ def _write_report(path: Path, report: dict[str, Any]) -> None:
         json.dumps(report, ensure_ascii=False, sort_keys=True, indent=2),
         encoding="utf-8",
     )
+
+
+def _validate_compliance_selection(
+    split: WideSeekSplit,
+    task_indices: tuple[int, ...],
+) -> None:
+    from heterospawn.training.wideseek_smoke import (
+        WIDESEEK_COMPLIANCE_PROFILE_V1,
+    )
+
+    compliance_indices = {
+        index
+        for compliance_split, index in WIDESEEK_COMPLIANCE_PROFILE_V1
+        if compliance_split == split
+    }
+    overlap = tuple(sorted(set(task_indices) & compliance_indices))
+    if overlap:
+        raise ValueError(f"SFT training selection overlaps the fixed compliance profile: {overlap}")
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()

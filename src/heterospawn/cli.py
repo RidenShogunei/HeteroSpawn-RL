@@ -298,7 +298,26 @@ def build_parser() -> argparse.ArgumentParser:
         help="required acknowledgement when no verified local model path is supplied",
     )
     wideseek_sft_smoke.add_argument("--max-sequence-length", type=int, default=4096)
+    wideseek_sft_smoke.add_argument("--max-new-tokens", type=int, default=512)
     wideseek_sft_smoke.add_argument("--max-workers", type=int, default=4)
+    wideseek_sft_smoke.add_argument(
+        "--run-compliance",
+        action="store_true",
+        help="run the fixed held-out 16-task profile after replacement restore",
+    )
+    wideseek_sft_smoke.add_argument(
+        "--service-url",
+        default="http://127.0.0.1:8000",
+    )
+    wideseek_sft_smoke.add_argument(
+        "--qdrant-url",
+        default="http://127.0.0.1:6333",
+    )
+    wideseek_sft_smoke.add_argument(
+        "--compliance-report",
+        type=Path,
+        default=Path("artifacts/wideseek-sft-smoke/compliance.json"),
+    )
     wideseek_sft_smoke.add_argument(
         "--artifact-dir",
         type=Path,
@@ -709,10 +728,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                     model_manifest=args.model_manifest,
                     artifact_dir=args.artifact_dir,
                     max_sequence_length=args.max_sequence_length,
-                    max_new_tokens=1,
+                    max_new_tokens=args.max_new_tokens,
                 ),
                 report_path=args.report,
                 max_workers=args.max_workers,
+                compliance_report_path=(args.compliance_report if args.run_compliance else None),
+                service_url=args.service_url,
+                qdrant_url=args.qdrant_url,
             )
         )
         print(json.dumps(report, ensure_ascii=False, sort_keys=True))

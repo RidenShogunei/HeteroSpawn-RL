@@ -80,6 +80,23 @@ It excludes questions, references, constructed conversations, token arrays, chec
 generated model text. Passing this smoke validates the SFT training contract; it does not establish
 that the warm start improves rollout behavior.
 
+To run the declared gate in the same process after replacement restore, select training indices
+that do not occur in the fixed compliance profile and add:
+
+```bash
+  --task-index 1 \
+  --task-index 2 \
+  --task-index 3 \
+  --run-compliance \
+  --service-url http://127.0.0.1:8000 \
+  --qdrant-url http://127.0.0.1:6333 \
+  --compliance-report artifacts/wideseek-sft-smoke/compliance.json
+```
+
+The command rejects any overlap between the SFT selection and the fixed 16-task compliance
+profile. Compliance uses the same pinned seed, raw-policy sampling, 4096/512 token limits, and
+3/600/800 Search/Access display budgets as the pre-SFT baseline.
+
 ## Contract boundary
 
 `SupervisedTrainingBatch` is intentionally distinct from `PolicyTrainingBatch`. An SFT batch has

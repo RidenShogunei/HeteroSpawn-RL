@@ -103,4 +103,6 @@ def test_wideseek_sft_smoke_defaults_to_qwen3_shared_update() -> None:
     assert args.model_profile == "qwen3-4b"
     assert args.task_indices is None
     assert args.max_sequence_length == 4096
+    assert args.max_new_tokens == 512
     assert args.max_workers == 4
+    assert args.run_compliance is False
