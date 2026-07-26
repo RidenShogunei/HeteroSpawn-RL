@@ -196,3 +196,20 @@ This file records milestone-level events. Fine-grained work remains in GitHub is
   from 9,840 to 6,452. Non-zero outcomes moved from 4/16 to 5/16, but mean outcome fell under the
   stochastic single-rollout comparison and legal spawn reached only 7/16. A repeated-rollout
   budget measurement is warranted, while direct RL and a default-budget change remain blocked.
+- Accepted ADR-0007 and recreated the clean 192-task, 540-example, 48-step shared SFT lineage
+  with a 4K/1024 rollout identity. All SFT contracts passed and the new immutable step-48
+  checkpoint became the base of one bounded shared-policy RL pilot.
+- The 64-episode, eight-task `G=8` rollout produced 206 exact training sequences and eight
+  non-degenerate advantage groups. Eager-attention backward OOMed on the longest 4,019-token
+  sequence before the optimizer step; the durable phase input allowed recovery without
+  replaying rollout or publishing stale weights.
+- Made the Qwen3 Turing profile explicitly use SDPA, non-reentrant gradient checkpointing, and
+  response-only logits. A real full-versus-compact Qwen3 probe was exactly equal, and the
+  formerly failing sequence completed at 7.63 GB peak allocated VRAM.
+- Added `wideseek-recover-phase` so a remote agent can resume or restore a durable optimizer
+  phase from the CLI. The real recovery produced one finite non-zero joint update, advanced
+  step 48 to 49, atomically committed, synchronized, restored in a replacement process, and
+  remained idempotent on a second recovery.
+- The fresh step-49 fixed-profile rollout passed all trajectory/revision checks. Spawn remained
+  7/16; stochastic outcome counts rose while success/format each fell by one, so no reward
+  improvement is claimed and the ADR-0006 scaling gate remains closed.

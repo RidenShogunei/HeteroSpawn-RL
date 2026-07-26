@@ -37,7 +37,10 @@ class LocalLoraConfig(BaseModel):
     device: str = "cuda:0"
     dtype: Literal["float16", "float32"] = "float16"
     quantization: Literal["none", "bnb-4bit"] = "none"
+    attention_implementation: Literal["eager", "sdpa"] = "eager"
+    response_only_logits: bool = False
     gradient_checkpointing: bool = False
+    gradient_checkpointing_use_reentrant: bool = False
     enable_thinking: bool | None = None
     max_sequence_length: int = Field(default=1024, ge=16)
     max_new_tokens: int = Field(default=32, ge=1)

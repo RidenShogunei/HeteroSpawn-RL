@@ -109,6 +109,9 @@ class LocalHfLoraBackend:
             model = peft.prepare_model_for_kbit_training(
                 model,
                 use_gradient_checkpointing=config.gradient_checkpointing,
+                gradient_checkpointing_kwargs={
+                    "use_reentrant": config.gradient_checkpointing_use_reentrant
+                },
             )
         elif config.gradient_checkpointing:
             model.gradient_checkpointing_enable()
@@ -537,6 +540,16 @@ class LocalHfLoraBackend:
         async with self._lock:
             return self._state(policy_id).checkpoint
 
+    def checkpoint_config(self, checkpoint: CheckpointRef) -> dict[str, Any]:
+        """Return the verified runtime configuration embedded in a checkpoint."""
+
+        path = _path_from_uri(checkpoint.uri)
+        manifest = self._verified_manifest(path, checkpoint)
+        config = manifest.get("config")
+        if not isinstance(config, dict):
+            raise CheckpointIntegrityError("checkpoint runtime configuration is invalid")
+        return dict(config)
+
     async def export_rollout_artifact(
         self,
         policy_id: PolicyId,
@@ -677,9 +690,16 @@ class LocalHfLoraBackend:
         if len(combined) > self.config.max_sequence_length:
             raise TrainingBatchError("training sample exceeds local max_sequence_length")
         tokens = self._torch.tensor([combined], dtype=self._torch.long, device=self.config.device)
-        output = self._model(input_ids=tokens)
-        start = len(prompt_ids) - 1
-        response_logits = output.logits[0, start : start + len(response_ids), :].float()
+        if self.config.response_only_logits:
+            output = self._model(
+                input_ids=tokens,
+                logits_to_keep=len(response_ids) + 1,
+            )
+            response_logits = output.logits[0, : len(response_ids), :].float()
+        else:
+            output = self._model(input_ids=tokens)
+            start = len(prompt_ids) - 1
+            response_logits = output.logits[0, start : start + len(response_ids), :].float()
         distributions = self._torch.log_softmax(response_logits, dim=-1)
         targets = self._torch.tensor(
             response_ids, dtype=self._torch.long, device=self.config.device
@@ -954,7 +974,7 @@ def _model_load_kwargs(
 ) -> dict[str, object]:
     kwargs: dict[str, object] = {
         "torch_dtype": dtype,
-        "attn_implementation": "eager",
+        "attn_implementation": config.attention_implementation,
         "low_cpu_mem_usage": True,
     }
     if config.quantization == "bnb-4bit":

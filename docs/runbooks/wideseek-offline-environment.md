@@ -182,6 +182,46 @@ heterospawn wideseek-train-smoke \
   --report "$HOME/heterospawn-runtime/results/independent/report.json"
 ```
 
+An audited shared-policy SFT checkpoint can initialize a bounded RL cycle with:
+
+```bash
+  --checkpoint-dir "$HOME/heterospawn-runtime/results/sft/checkpoints/shared_step-N_<digest>" \
+  --require-learning-signal
+```
+
+The initialization path applies the same manifest, base-model, and per-file verification as
+checkpoint-only compliance, restores optimizer/RNG state, and explicitly synchronizes rollout
+weights before the first system rollout. The initial `WeightVersion` is bound into the config and
+phase-transaction identities. `--require-learning-signal` writes the safe report and then fails
+the command unless at least one reward group is non-degenerate, advantages are non-zero, the
+gradient is finite and non-zero, and the target adapter changes. One checkpoint directory applies
+only to `--topology shared`; independent initialization needs an explicit policy-fork contract.
+
+If the process crashes after the phase input is durable but before commit publication, recover
+the existing transaction without replaying Search/Access or model sampling:
+
+```bash
+PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
+heterospawn wideseek-recover-phase \
+  --transaction-id "wideseek-train-smoke-shared:width_20k-cycle-0:joint_update" \
+  --transaction-dir "$HOME/heterospawn-runtime/results/shared/transactions" \
+  --model-profile qwen3-4b \
+  --model-path "$HOME/heterospawn-runtime/models/Qwen3-4B" \
+  --model-manifest manifests/qwen3-4b.json \
+  --device cuda:0 \
+  --max-sequence-length 4096 \
+  --max-new-tokens 1024 \
+  --require-learning-signal \
+  --artifact-dir "$HOME/heterospawn-runtime/results/shared/checkpoints" \
+  --report "$HOME/heterospawn-runtime/results/shared/recovery-report.json"
+```
+
+The command validates the immutable input and base checkpoint, resumes or restores exactly one
+optimizer transaction, synchronizes the committed weights, and emits a reference-safe report.
+Re-running it after commit must leave the optimizer step and commit digest unchanged. Use the
+same pinned model profile and limits as the failed phase; changing reward, dataset, prompt, tool,
+or policy identities requires a new experiment rather than recovery.
+
 For the Qwen3-4B research profile, run the training command from an environment installed with
 `.[qlora]` and replace the model arguments with:
 
@@ -204,6 +244,9 @@ training contract that also reconstructs the same warper during update.
 The Qwen3 CLI profile disables thinking so a complete action fits the bounded 4096-token smoke
 window. A response that still reaches the generation length limit without a complete tool call is
 an invalid repair attempt, not an `ANSWER`.
+The profile uses PyTorch SDPA, non-reentrant gradient checkpointing, and Qwen3's response-only
+logit projection for 4K training forwards. The response projection retains the prompt-final
+causal position and every response-predicting position; it does not truncate context or targets.
 Search and Access model-visible content is deterministically bounded by the two character-budget
 flags. Full response digests and URL provenance remain in the audit trace; changing either budget
 changes the prompt and phase identity.

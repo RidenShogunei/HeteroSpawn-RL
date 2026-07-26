@@ -65,7 +65,10 @@ def test_qwen3_cli_profile_selects_verified_qlora_defaults(tmp_path: Path) -> No
     assert config.model_revision == "1cfa9a7208912126459214e8b04321603b3df60c"
     assert config.model_manifest_path == Path("manifests/qwen3-4b.json")
     assert config.quantization == "bnb-4bit"
+    assert config.attention_implementation == "sdpa"
+    assert config.response_only_logits is True
     assert config.gradient_checkpointing is True
+    assert config.gradient_checkpointing_use_reentrant is False
     assert config.enable_thinking is False
 
 
@@ -93,6 +96,28 @@ def test_wideseek_train_cli_exposes_sampled_rollout_controls() -> None:
     )
 
     assert args.do_sample is True
+
+
+def test_wideseek_train_cli_exposes_shared_checkpoint_initialization() -> None:
+    args = build_parser().parse_args(
+        [
+            "wideseek-train-smoke",
+            "--topology",
+            "shared",
+            "--model-path",
+            "model",
+            "--checkpoint-dir",
+            "sft-checkpoint",
+            "--max-new-tokens",
+            "1024",
+            "--require-learning-signal",
+        ]
+    )
+
+    assert args.checkpoint_dir == Path("sft-checkpoint")
+    assert args.max_sequence_length == 4096
+    assert args.max_new_tokens == 1024
+    assert args.require_learning_signal is True
 
 
 def test_local_checkpoint_ref_is_reconstructed_from_manifest(tmp_path: Path) -> None:
@@ -189,3 +214,19 @@ def test_wideseek_compliance_exposes_checkpoint_only_rollout() -> None:
 
     assert args.checkpoint_dir == Path("checkpoint")
     assert args.max_sequence_length == 8192
+
+
+def test_wideseek_recovery_cli_exposes_durable_phase_identity() -> None:
+    args = build_parser().parse_args(
+        [
+            "wideseek-recover-phase",
+            "--transaction-id",
+            "experiment:cycle:joint_update",
+            "--model-path",
+            "model",
+            "--require-learning-signal",
+        ]
+    )
+
+    assert args.transaction_id == "experiment:cycle:joint_update"
+    assert args.require_learning_signal is True
