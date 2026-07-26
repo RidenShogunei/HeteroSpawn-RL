@@ -259,4 +259,3 @@ def test_independent_train_accepts_explicit_shared_checkpoint_fork() -> None:
 
     assert args.topology == "independent"
     assert args.checkpoint_dir == Path("shared-checkpoint")
-
