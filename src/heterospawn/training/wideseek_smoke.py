@@ -855,8 +855,6 @@ async def run_wideseek_train_smoke(
 
     if rollouts_per_task < 2:
         raise ValueError("WideSeek train smoke requires at least two rollouts per task")
-    if checkpoint_dir is not None and topology != "shared":
-        raise ValueError("one checkpoint directory can initialize only the shared topology")
     manifest = load_asset_manifest(data_manifest_path)
     filename = f"{split}.jsonl"
     expected = next((file for file in manifest.files if file.path == filename), None)
@@ -880,22 +878,88 @@ async def run_wideseek_train_smoke(
     )
     backend = LocalHfLoraBackend.from_pretrained(config=local_config, policy_ids=policy_ids)
     loaded_checkpoint = None
+    checkpoint_initialization_valid = True
     if checkpoint_dir is not None:
         checkpoint = load_local_checkpoint_ref(checkpoint_dir)
-        if checkpoint.policy_id != policy_ids[0]:
-            raise ValueError("checkpoint policy does not match the shared training policy")
-        restored_version = await backend.restore_checkpoint(checkpoint)
-        synced_revision = await backend.sync_rollout_weights(
-            checkpoint.policy_id,
-            restored_version,
-        )
-        loaded_checkpoint = {
-            "checkpoint_id": str(checkpoint.checkpoint_id),
-            "policy_id": str(checkpoint.policy_id),
-            "optimizer_step": restored_version.optimizer_step,
-            "checkpoint_digest": restored_version.checkpoint_digest,
-            "rollout_replica_set_revision": synced_revision.replica_set_revision,
-        }
+        if topology == "shared":
+            if checkpoint.policy_id != policy_ids[0]:
+                raise ValueError("checkpoint policy does not match the shared training policy")
+            restored_version = await backend.restore_checkpoint(checkpoint)
+            synced_revision = await backend.sync_rollout_weights(
+                checkpoint.policy_id,
+                restored_version,
+            )
+            loaded_checkpoint = {
+                "initialization": "direct_restore",
+                "checkpoint_id": str(checkpoint.checkpoint_id),
+                "policy_id": str(checkpoint.policy_id),
+                "optimizer_step": restored_version.optimizer_step,
+                "checkpoint_digest": restored_version.checkpoint_digest,
+                "rollout_replica_set_revision": synced_revision.replica_set_revision,
+            }
+        else:
+            if checkpoint.policy_id != PolicyId("shared"):
+                raise ValueError(
+                    "independent warm start requires one audited shared-policy checkpoint"
+                )
+            forked = await backend.fork_checkpoint(checkpoint, policy_ids)
+            synced_revisions: list[RolloutRevision] = []
+            for target in forked:
+                synced_revisions.append(
+                    await backend.sync_rollout_weights(
+                        target.policy_id,
+                        target.weight_version,
+                    )
+                )
+            synced = tuple(synced_revisions)
+            target_hashes = {
+                str(target.policy_id): backend.adapter_hash(target.policy_id) for target in forked
+            }
+            expected_lineage = {
+                "kind": "policy_fork",
+                "source_policy_id": str(checkpoint.policy_id),
+                "source_optimizer_step": checkpoint.weight_version.optimizer_step,
+                "source_checkpoint_digest": checkpoint.weight_version.checkpoint_digest,
+                "source_optimizer_state_digest": checkpoint.optimizer_state_digest,
+            }
+            loaded_checkpoint = {
+                "initialization": "independent_policy_fork",
+                "source": {
+                    "checkpoint_id": str(checkpoint.checkpoint_id),
+                    "policy_id": str(checkpoint.policy_id),
+                    "optimizer_step": checkpoint.weight_version.optimizer_step,
+                    "checkpoint_digest": checkpoint.weight_version.checkpoint_digest,
+                    "optimizer_state_digest": checkpoint.optimizer_state_digest,
+                },
+                "targets": [
+                    {
+                        "checkpoint_id": str(target.checkpoint_id),
+                        "policy_id": str(target.policy_id),
+                        "optimizer_step": target.weight_version.optimizer_step,
+                        "checkpoint_digest": target.weight_version.checkpoint_digest,
+                        "optimizer_state_digest": target.optimizer_state_digest,
+                        "rollout_replica_set_revision": revision.replica_set_revision,
+                    }
+                    for target, revision in zip(forked, synced, strict=True)
+                ],
+                "target_adapter_hashes_equal": len(set(target_hashes.values())) == 1,
+                "target_adapters_verified_against_source": True,
+                "target_checkpoint_digests_distinct": (
+                    len({target.weight_version.checkpoint_digest for target in forked})
+                    == len(forked)
+                ),
+                "target_lineage_verified": all(
+                    backend.checkpoint_lineage(target) == expected_lineage for target in forked
+                ),
+            }
+            checkpoint_initialization_valid = all(
+                (
+                    loaded_checkpoint["target_adapter_hashes_equal"],
+                    loaded_checkpoint["target_adapters_verified_against_source"],
+                    loaded_checkpoint["target_checkpoint_digests_distinct"],
+                    loaded_checkpoint["target_lineage_verified"],
+                )
+            )
     main_id = policy_ids[0]
     sub_id = main_id if topology == "shared" else PolicyId("sub")
     registry = PolicyRegistry(
@@ -1118,7 +1182,7 @@ async def run_wideseek_train_smoke(
         with torch.cuda.device(local_config.device):
             peak_bytes = int(torch.cuda.max_memory_allocated())
     report: dict[str, Any] = {
-        "schema_revision": "heterospawn-wideseek-train-smoke-v2",
+        "schema_revision": "heterospawn-wideseek-train-smoke-v3",
         "status": (
             "passed"
             if not require_learning_signal or all(learning_signal_checks.values())
@@ -1168,6 +1232,7 @@ async def run_wideseek_train_smoke(
                 commit.input_digest for commit in result.phase_commits
             ),
             "learning_signal": learning_signal_checks,
+            "checkpoint_initialization": checkpoint_initialization_valid,
         },
         "adapter_changed": adapter_changed,
         "versions": {
@@ -1200,8 +1265,10 @@ async def run_wideseek_train_smoke(
             for commit in result.phase_commits
         ],
     }
-    if not exact_round_trip or not all(restored.values()):
-        raise RuntimeError("WideSeek train smoke failed exact trajectory or restore validation")
+    if not exact_round_trip or not all(restored.values()) or not checkpoint_initialization_valid:
+        raise RuntimeError(
+            "WideSeek train smoke failed initialization, exact trajectory, or restore validation"
+        )
     await asyncio.to_thread(_write_report, report_path, report)
     if require_learning_signal and not all(learning_signal_checks.values()):
         failed = sorted(name for name, passed in learning_signal_checks.items() if not passed)
@@ -1236,3 +1303,4 @@ def _write_report(path: Path, report: dict[str, Any]) -> None:
         encoding="utf-8",
     )
     temporary.replace(path)
+
