@@ -7,6 +7,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from heterospawn.domain.supervised import SupervisedPromptEncoding
 from heterospawn.domain.training import PromptEncoding, canonical_digest
 from heterospawn.policies.base import Message
 from heterospawn.policies.trainable import ToolDefinition
@@ -128,6 +129,65 @@ class LocalPromptEncoder:
         self._issued_prompt_template_revisions.add(prompt_template_revision)
         return PromptEncoding(
             prompt_ids=tuple(int(token_id) for token_id in prompt_ids),
+            tokenizer_revision=self.tokenizer_revision,
+            prompt_template_revision=prompt_template_revision,
+        )
+
+    def encode_supervised(
+        self,
+        messages: tuple[Message, ...],
+        target: str,
+        tools: tuple[ToolDefinition, ...] = (),
+    ) -> SupervisedPromptEncoding:
+        """Encode one assistant target without reconstructing it from decoded tokens."""
+
+        if not target:
+            raise ValueError("supervised target cannot be empty")
+        payload = [message.model_dump(mode="json") for message in messages]
+        tool_payload = [tool.as_chat_template_tool() for tool in tools]
+        shared_args: dict[str, object] = {"tokenize": True}
+        if tool_payload:
+            shared_args["tools"] = tool_payload
+        if self._enable_thinking is not None:
+            shared_args["enable_thinking"] = self._enable_thinking
+        prompt_ids = tuple(
+            int(token_id)
+            for token_id in self._tokenizer.apply_chat_template(
+                payload,
+                add_generation_prompt=True,
+                **shared_args,
+            )
+        )
+        full_ids = tuple(
+            int(token_id)
+            for token_id in self._tokenizer.apply_chat_template(
+                [
+                    *payload,
+                    Message(role="assistant", content=target).model_dump(mode="json"),
+                ],
+                add_generation_prompt=False,
+                **shared_args,
+            )
+        )
+        if full_ids[: len(prompt_ids)] != prompt_ids:
+            raise ValueError("chat template does not preserve the supervised prompt prefix")
+        target_ids = full_ids[len(prompt_ids) :]
+        if not target_ids:
+            raise ValueError("chat template produced an empty supervised target")
+        prompt_template_revision = (
+            canonical_digest(
+                {
+                    "base_revision": self.prompt_template_revision,
+                    "tools": tool_payload,
+                }
+            )
+            if tool_payload
+            else self.prompt_template_revision
+        )
+        self._issued_prompt_template_revisions.add(prompt_template_revision)
+        return SupervisedPromptEncoding(
+            prompt_ids=prompt_ids,
+            target_ids=target_ids,
             tokenizer_revision=self.tokenizer_revision,
             prompt_template_revision=prompt_template_revision,
         )

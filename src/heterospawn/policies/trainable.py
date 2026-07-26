@@ -7,6 +7,7 @@ from typing import Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from heterospawn.domain.supervised import SupervisedPromptEncoding
 from heterospawn.domain.training import PromptEncoding
 from heterospawn.policies.base import Message
 
@@ -44,3 +45,14 @@ class TrainablePolicyCodec(Protocol):
     ) -> PromptEncoding: ...
 
     def decode(self, response_ids: tuple[int, ...]) -> str: ...
+
+
+class SupervisedPolicyCodec(TrainablePolicyCodec, Protocol):
+    """Adds exact assistant-target encoding for supervised warm starts."""
+
+    def encode_supervised(
+        self,
+        messages: tuple[Message, ...],
+        target: str,
+        tools: tuple[ToolDefinition, ...] = (),
+    ) -> SupervisedPromptEncoding: ...

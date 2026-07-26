@@ -221,6 +221,39 @@ def build_parser() -> argparse.ArgumentParser:
         choices=("width_20k", "depth_20k", "hybrid_20k"),
         default="hybrid_20k",
     )
+    wideseek_sft = subparsers.add_parser(
+        "wideseek-sft-dry-run",
+        help="construct an answer-safe summary of role-targeted WideSeek SFT examples",
+    )
+    wideseek_sft.add_argument(
+        "--manifest",
+        type=Path,
+        default=Path("manifests/wideseek-train-data.json"),
+    )
+    wideseek_sft.add_argument(
+        "--data-dir",
+        type=Path,
+        default=Path("artifacts/wideseek-assets/train-data"),
+    )
+    wideseek_sft.add_argument(
+        "--split",
+        choices=("width_20k", "depth_20k", "hybrid_20k"),
+        default="hybrid_20k",
+    )
+    wideseek_sft.add_argument(
+        "--task-index",
+        action="append",
+        type=int,
+        dest="task_indices",
+        help="zero-based training task index; repeat for explicit selection",
+    )
+    wideseek_sft.add_argument(
+        "--task-limit",
+        type=int,
+        default=8,
+        help="number of leading tasks when --task-index is omitted",
+    )
+    wideseek_sft.add_argument("--max-workers", type=int, default=4)
     environment_check = subparsers.add_parser(
         "wideseek-check-environment",
         help="verify pinned corpus/retriever assets and probe the offline Search/Access service",
@@ -571,6 +604,33 @@ def main(argv: Sequence[str] | None = None) -> int:
             revision=manifest.revision,
         )
         print(wideseek_dataset.summary().model_dump_json())
+        return 0
+    if args.command == "wideseek-sft-dry-run":
+        from heterospawn.assets import load_asset_manifest
+        from heterospawn.benchmarks.wideseek import load_wideseek_dataset
+        from heterospawn.training.wideseek_sft import WideSeekRoleSftConstructor
+
+        manifest = load_asset_manifest(args.manifest)
+        filename = f"{args.split}.jsonl"
+        expected = next((file for file in manifest.files if file.path == filename), None)
+        if expected is None or expected.sha256 is None:
+            raise SystemExit(f"split is absent from manifest: {args.split}")
+        if args.task_limit < 1:
+            raise SystemExit("--task-limit must be positive")
+        if not 1 <= args.max_workers <= 4:
+            raise SystemExit("--max-workers must be in 1..4")
+        wideseek_dataset = load_wideseek_dataset(
+            args.data_dir / filename,
+            split=args.split,
+            expected_sha256=expected.sha256,
+            revision=manifest.revision,
+        )
+        selected_indices = tuple(args.task_indices or range(args.task_limit))
+        construction = WideSeekRoleSftConstructor(max_workers=args.max_workers).build(
+            wideseek_dataset,
+            task_indices=selected_indices,
+        )
+        print(construction.summary.model_dump_json())
         return 0
     if args.command == "wideseek-check-environment":
         from heterospawn.assets import AssetPreparer, load_asset_manifest

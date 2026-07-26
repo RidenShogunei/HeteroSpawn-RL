@@ -151,3 +151,12 @@ This file records milestone-level events. Fine-grained work remains in GitHub is
   produced 55 real Search/Access calls, but only one of 16 answers passed format and received a
   non-zero exact outcome. This rejects immediate direct-RL scaling and selects a small
   tool/evidence/output-format warm-start SFT as the next gate.
+
+## 2026-07-26
+
+- Accepted ADR-0006: use a small role-targeted WideSeek SFT warm start before further direct-RL
+  scaling. The initial supervised targets cover only post-evidence Main final answers and
+  post-Access Sub summaries; dynamic spawn and Search/Access decisions remain RL-controlled.
+- Added a deterministic, answer-safe SFT construction dry run and separate exact-token
+  supervised contracts. Reference plaintext stays in the verified in-memory construction
+  boundary, while reports expose only pinned revisions and aggregate counts.

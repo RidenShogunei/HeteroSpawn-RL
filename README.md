@@ -98,12 +98,17 @@ Install the optional Hub dependency, then download and verify the pinned trainin
 python -m pip install -e ".[wideseek]"
 heterospawn wideseek-fetch-assets
 heterospawn wideseek-inspect-data --split hybrid_20k
+heterospawn wideseek-sft-dry-run --split hybrid_20k --task-limit 8
 ```
 
 The fetcher uses bounded official-to-mirror fallback, resumable partial downloads, and committed
 per-file content digests. Copied assets can be checked offline with `--verify-only`; runtime data
 and reference answers are never committed or printed. See the
 [WideSeek environment guide](docs/benchmarks/wideseek-r1.md).
+
+The SFT dry run constructs only post-evidence Main final-answer and Sub summary examples in
+memory; it does not train a model or supervise spawn/Search/Access choices. See the
+[warm-start runbook](docs/runbooks/wideseek-sft-warm-start.md).
 
 The complete offline environment additionally uses the pinned 156 GB Wiki-2018/Qdrant corpus and
 E5-base-v2. Its Linux launcher verifies every source file, starts a mutable Qdrant deployment and
