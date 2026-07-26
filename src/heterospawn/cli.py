@@ -1301,4 +1301,3 @@ def _write_pilot_progress(summary: PilotEpisodeSummary) -> None:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
