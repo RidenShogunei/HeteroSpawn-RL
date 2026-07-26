@@ -160,3 +160,13 @@ This file records milestone-level events. Fine-grained work remains in GitHub is
 - Added a deterministic, answer-safe SFT construction dry run and separate exact-token
   supervised contracts. Reference plaintext stays in the verified in-memory construction
   boundary, while reports expose only pinned revisions and aggregate counts.
+- Added role-balanced target-only supervised updates to the LocalHF backend, including global
+  batch-id idempotency, target-policy isolation, immutable checkpoint identity, explicit rollout
+  synchronization, and replacement-process restore.
+- Added an opt-in Qwen3-4B SFT contract smoke and an in-process held-out compliance gate. A real
+  RTX 2080 Ti run passed all update/sync/stale-revision/restore checks with a non-zero adapter
+  update over 20 examples and 2,516 target tokens.
+- Retained the negative behavioral result: the unchanged fixed 16-task profile remained at one
+  format-valid and one non-zero-outcome answer after one shared-policy optimizer step. The
+  ADR-0006 readiness gate therefore remains closed; the next experiment is a bounded multi-step
+  SFT strength/coverage diagnosis, not direct-RL scaling.

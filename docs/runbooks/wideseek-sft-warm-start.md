@@ -1,7 +1,8 @@
 # WideSeek role-targeted SFT warm-start runbook
 
-This runbook covers the optional pre-RL warm start selected by ADR-0006. The current implementation
-constructs and audits examples; it does not yet perform a model update.
+This runbook covers the optional pre-RL warm start selected by ADR-0006. It supports an answer-safe
+construction dry run and an opt-in shared-policy LocalHF QLoRA update/checkpoint/sync/restore
+smoke.
 
 ## Why construction is required
 
@@ -52,6 +53,50 @@ and the worker-count histogram. It does not print or persist questions, referenc
 token arrays, or per-example digests. Plaintext examples exist only in memory and are discarded
 when the process exits.
 
+## Real-model SFT contract smoke
+
+Run this only in the isolated QLoRA environment with one explicitly selected idle GPU:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 heterospawn wideseek-sft-smoke \
+  --split hybrid_20k \
+  --task-index 0 \
+  --model-profile qwen3-4b \
+  --model-path /absolute/path/to/Qwen3-4B \
+  --model-manifest manifests/qwen3-4b.json \
+  --max-sequence-length 4096 \
+  --max-workers 4 \
+  --artifact-dir artifacts/wideseek-sft-smoke/checkpoints \
+  --report artifacts/wideseek-sft-smoke/report.json
+```
+
+The smoke performs exactly one shared-policy optimizer step. It verifies a non-zero train-adapter
+change, an unchanged rollout adapter before synchronization, idempotent batch replay, stale
+revision rejection, atomic checkpoint identity, explicit synchronization, replacement-process
+restore, and a new deployment identity.
+
+The report contains aggregate token counts, versions, hashes, resource measurements, and checks.
+It excludes questions, references, constructed conversations, token arrays, checkpoint paths, and
+generated model text. Passing this smoke validates the SFT training contract; it does not establish
+that the warm start improves rollout behavior.
+
+To run the declared gate in the same process after replacement restore, select training indices
+that do not occur in the fixed compliance profile and add:
+
+```bash
+  --task-index 1 \
+  --task-index 2 \
+  --task-index 3 \
+  --run-compliance \
+  --service-url http://127.0.0.1:8000 \
+  --qdrant-url http://127.0.0.1:6333 \
+  --compliance-report artifacts/wideseek-sft-smoke/compliance.json
+```
+
+The command rejects any overlap between the SFT selection and the fixed 16-task compliance
+profile. Compliance uses the same pinned seed, raw-policy sampling, 4096/512 token limits, and
+3/600/800 Search/Access display budgets as the pre-SFT baseline.
+
 ## Contract boundary
 
 `SupervisedTrainingBatch` is intentionally distinct from `PolicyTrainingBatch`. An SFT batch has
@@ -66,5 +111,5 @@ Do not:
 - route SFT examples through the RL batch builder;
 - use the released WideSeek-R1-4B as a teacher without a new ADR.
 
-The next implementation stage adds LocalHF QLoRA SFT update/checkpoint/sync/restore support, then
-runs the unchanged fixed 16-task compliance profile as the declared readiness gate.
+After the contract smoke passes, run a separately recorded small warm start followed by the
+unchanged fixed 16-task compliance profile as the declared readiness gate.

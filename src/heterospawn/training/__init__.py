@@ -1,6 +1,11 @@
 """Backend-independent policy training state machines."""
 
-from heterospawn.training.base import PolicyService, RolloutArtifactProvider, TrainingBackend
+from heterospawn.training.base import (
+    PolicyService,
+    RolloutArtifactProvider,
+    SupervisedTrainingBackend,
+    TrainingBackend,
+)
 from heterospawn.training.batch import (
     OutcomeAdvantageGroup,
     TrainingBatchBuilder,
@@ -66,6 +71,7 @@ __all__ = [
     "RewardConfig",
     "RoleRewardTotals",
     "RolloutArtifactProvider",
+    "SupervisedTrainingBackend",
     "TaskRolloutGroup",
     "TrainableAlternatingCycleRunner",
     "TrainableCycleResult",

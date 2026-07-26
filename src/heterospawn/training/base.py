@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Protocol
 
 from heterospawn.domain.ids import PolicyId
+from heterospawn.domain.supervised import SupervisedTrainingBatch
 from heterospawn.domain.training import (
     CheckpointRef,
     GenerationRequest,
@@ -46,6 +47,15 @@ class TrainingBackend(Protocol):
     async def save_checkpoint(self, policy_id: PolicyId) -> CheckpointRef: ...
 
     async def restore_checkpoint(self, checkpoint: CheckpointRef) -> WeightVersion: ...
+
+
+class SupervisedTrainingBackend(Protocol):
+    async def update_supervised(
+        self,
+        policy_id: PolicyId,
+        batch: SupervisedTrainingBatch,
+        expected_base_version: WeightVersion,
+    ) -> UpdateResult: ...
 
 
 class RolloutArtifactProvider(Protocol):

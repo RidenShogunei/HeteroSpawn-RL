@@ -23,6 +23,9 @@ from heterospawn.training.wideseek_sft import (
     build_supervised_training_batch,
     materialize_supervised_conversations,
 )
+from heterospawn.training.wideseek_sft_smoke import (
+    _validate_compliance_selection,
+)
 
 
 class _DeterministicSupervisedCodec:
@@ -242,3 +245,10 @@ def test_local_prompt_encoder_preserves_exact_supervised_boundary() -> None:
 
     assert encoding.prompt_ids + encoding.target_ids == expected_full
     assert encoding.target_ids[-1] == 0
+
+
+def test_sft_selection_cannot_overlap_fixed_compliance_profile() -> None:
+    with pytest.raises(ValueError, match="overlaps"):
+        _validate_compliance_selection("hybrid_20k", (0, 1))
+
+    _validate_compliance_selection("hybrid_20k", (1, 2, 3))
