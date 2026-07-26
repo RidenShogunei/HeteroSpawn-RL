@@ -397,8 +397,9 @@ async def run_wideseek_compliance_baseline(
         for policy_id in policy_ids
         for adapter_kind in ("train", "rollout")
     }
-    torch = importlib.import_module("torch")
-    if str(local_config.device).startswith("cuda"):
+    cuda_enabled = str(local_config.device).startswith("cuda")
+    torch = importlib.import_module("torch") if cuda_enabled else None
+    if torch is not None:
         with torch.cuda.device(local_config.device):
             torch.cuda.reset_peak_memory_stats()
 
@@ -453,7 +454,7 @@ async def run_wideseek_compliance_baseline(
     adapters_unchanged = final_hashes == initial_hashes
     peak_bytes = 0
     gpu_name = None
-    if str(local_config.device).startswith("cuda"):
+    if torch is not None:
         device_index = torch.device(local_config.device).index or 0
         gpu_name = torch.cuda.get_device_name(device_index)
         with torch.cuda.device(local_config.device):

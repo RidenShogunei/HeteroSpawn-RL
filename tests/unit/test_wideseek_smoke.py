@@ -110,6 +110,7 @@ async def test_rollout_smoke_forces_real_shape_search_then_access_without_plaint
 @pytest.mark.asyncio
 async def test_compliance_baseline_is_rollout_only_and_reference_safe(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     url = "https://en.wikipedia.org/wiki/Red_Bull"
 
@@ -184,6 +185,10 @@ async def test_compliance_baseline_is_rollout_only_and_reference_safe(
     )
     report_path = tmp_path / "report.json"
     policy_id = PolicyId("shared")
+    monkeypatch.setattr(
+        "heterospawn.training.wideseek_smoke.importlib.import_module",
+        lambda name: pytest.fail(f"CPU compliance baseline imported optional module: {name}"),
+    )
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         tools = WideSeekLocalToolService(WideSeekLocalConfig(), client=client)
         report = await run_wideseek_compliance_baseline(
