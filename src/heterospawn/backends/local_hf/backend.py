@@ -25,6 +25,7 @@ from heterospawn.domain.training import (
     CheckpointRef,
     GenerationRequest,
     GenerationResult,
+    JsonScalar,
     PolicyTrainingBatch,
     RolloutArtifact,
     UpdateResult,
@@ -550,6 +551,23 @@ class LocalHfLoraBackend:
             raise CheckpointIntegrityError("checkpoint runtime configuration is invalid")
         return dict(config)
 
+    def checkpoint_lineage(self, checkpoint: CheckpointRef) -> dict[str, JsonScalar] | None:
+        """Return verified policy-fork provenance when a checkpoint has one."""
+
+        path = _path_from_uri(checkpoint.uri)
+        manifest = self._verified_manifest(path, checkpoint)
+        lineage = manifest.get("lineage")
+        if lineage is None:
+            return None
+        if not isinstance(lineage, dict) or any(
+            not isinstance(key, str)
+            or not isinstance(value, (str, int, float, bool))
+            or value is None
+            for key, value in lineage.items()
+        ):
+            raise CheckpointIntegrityError("checkpoint lineage is invalid")
+        return dict(lineage)
+
     async def export_rollout_artifact(
         self,
         policy_id: PolicyId,
@@ -618,6 +636,84 @@ class LocalHfLoraBackend:
             if manifest["adapter_digest"] != self._adapter_digest(state.train_adapter):
                 raise CheckpointIntegrityError("restored adapter hash differs from manifest")
             return state.weight
+
+    async def fork_checkpoint(
+        self,
+        source: CheckpointRef,
+        target_policy_ids: tuple[PolicyId, ...],
+    ) -> tuple[CheckpointRef, ...]:
+        """Materialize one verified checkpoint as independent policy lineages.
+
+        The fork copies adapter and optimizer state without performing an optimizer
+        step. Rollout adapters remain untouched until each returned checkpoint is
+        explicitly synchronized.
+        """
+
+        async with self._lock:
+            if not target_policy_ids or len(set(target_policy_ids)) != len(target_policy_ids):
+                raise ConfigurationError("fork targets must be non-empty and unique")
+            if source.policy_id in target_policy_ids:
+                raise ConfigurationError("fork targets must differ from the source policy")
+            target_states = tuple(self._state(policy_id) for policy_id in target_policy_ids)
+            path = _path_from_uri(source.uri)
+            manifest = self._verified_manifest(path, source)
+            try:
+                safetensors_torch = importlib.import_module("safetensors.torch")
+            except ImportError as exc:  # pragma: no cover
+                raise ConfigurationError("safetensors is required for checkpoint fork") from exc
+            adapter_state = safetensors_torch.load_file(
+                str(path / "adapter.safetensors"), device="cpu"
+            )
+            optimizer_state = self._torch.load(
+                path / "optimizer.pt",
+                map_location=self.config.device,
+                weights_only=True,
+            )
+            rng_state = self._torch.load(
+                path / "rng.pt",
+                map_location="cpu",
+                weights_only=True,
+            )
+            source_adapter_digest = manifest.get("adapter_digest")
+            if not isinstance(source_adapter_digest, str) or not source_adapter_digest:
+                raise CheckpointIntegrityError("source checkpoint adapter digest is invalid")
+            lineage: dict[str, JsonScalar] = {
+                "kind": "policy_fork",
+                "source_policy_id": str(source.policy_id),
+                "source_optimizer_step": source.weight_version.optimizer_step,
+                "source_checkpoint_digest": source.weight_version.checkpoint_digest,
+                "source_optimizer_state_digest": source.optimizer_state_digest,
+            }
+            for state in target_states:
+                self._peft.set_peft_model_state_dict(
+                    self._model,
+                    adapter_state,
+                    adapter_name=state.train_adapter,
+                )
+                state.optimizer.load_state_dict(copy.deepcopy(optimizer_state))
+                if self._adapter_digest(state.train_adapter) != source_adapter_digest:
+                    raise CheckpointIntegrityError("forked adapter differs from source manifest")
+
+            self._torch.set_rng_state(rng_state["cpu"])
+            if str(self.config.device).startswith("cuda") and rng_state["cuda"]:
+                self._torch.cuda.set_rng_state_all(rng_state["cuda"])
+            random.setstate(
+                _nested_tuple(json.loads((path / "python_random.json").read_text(encoding="utf-8")))
+            )
+
+            checkpoints = tuple(
+                self._save_checkpoint(
+                    policy_id,
+                    source.weight_version.optimizer_step,
+                    lineage=lineage,
+                )
+                for policy_id in target_policy_ids
+            )
+            for checkpoint in checkpoints:
+                state = self._state(checkpoint.policy_id)
+                state.weight = checkpoint.weight_version
+                state.checkpoint = checkpoint
+            return checkpoints
 
     def _initialize_policy(self, policy_id: PolicyId) -> None:
         train_adapter = _adapter_name(policy_id, "train")
@@ -751,7 +847,13 @@ class LocalHfLoraBackend:
             digest.update(bytes(tensor.view(self._torch.uint8).flatten().tolist()))
         return digest.hexdigest()
 
-    def _save_checkpoint(self, policy_id: PolicyId, optimizer_step: int) -> CheckpointRef:
+    def _save_checkpoint(
+        self,
+        policy_id: PolicyId,
+        optimizer_step: int,
+        *,
+        lineage: dict[str, JsonScalar] | None = None,
+    ) -> CheckpointRef:
         try:
             safetensors_torch = importlib.import_module("safetensors.torch")
         except ImportError as exc:  # pragma: no cover
@@ -806,6 +908,8 @@ class LocalHfLoraBackend:
                 "adapter_digest": adapter_digest,
                 "file_digests": file_digests,
             }
+            if lineage is not None:
+                manifest_payload["lineage"] = dict(lineage)
             checkpoint_digest = canonical_digest(manifest_payload)
             weight = WeightVersion(
                 policy_id=policy_id,
@@ -1093,3 +1197,4 @@ def _as_bool(value: object, *, name: str) -> bool:
     if not isinstance(value, bool):
         raise TrainingBatchError(f"{name} must be a boolean")
     return value
+
