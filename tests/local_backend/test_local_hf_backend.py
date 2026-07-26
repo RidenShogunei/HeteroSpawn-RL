@@ -641,4 +641,3 @@ async def test_all_lora_adapters_remain_float32_with_fp16_base(tmp_path: Path) -
         assert tensors
         assert {tensor.dtype for tensor in tensors.values()} == {torch.float32}
         assert all(torch.isfinite(tensor).all() for tensor in tensors.values())
-
