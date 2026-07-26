@@ -1197,4 +1197,3 @@ def _as_bool(value: object, *, name: str) -> bool:
     if not isinstance(value, bool):
         raise TrainingBatchError(f"{name} must be a boolean")
     return value
-
