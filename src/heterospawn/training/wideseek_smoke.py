@@ -7,14 +7,21 @@ import base64
 import importlib
 import json
 import random
+import statistics
 import time
+from collections import Counter
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
 
 from heterospawn.assets import load_asset_manifest
 from heterospawn.backends.local_hf.backend import LocalHfLoraBackend
 from heterospawn.backends.local_hf.config import LocalLoraConfig
-from heterospawn.benchmarks.wideseek import WideSeekSplit, load_wideseek_dataset
+from heterospawn.benchmarks.wideseek import (
+    WideSeekDataset,
+    WideSeekSplit,
+    load_wideseek_dataset,
+)
 from heterospawn.domain.ids import EpisodeId, PolicyId, RolloutId, TaskId
 from heterospawn.domain.tasks import ResearchTask
 from heterospawn.domain.training import (
@@ -29,7 +36,11 @@ from heterospawn.evaluation.semantic_judge import (
     MiniMaxSemanticJudge,
     SemanticJudgeCache,
 )
-from heterospawn.evaluation.wideseek import WideSeekEvaluator
+from heterospawn.evaluation.wideseek import (
+    WideSeekEvaluation,
+    WideSeekEvaluator,
+)
+from heterospawn.orchestration.trainable_models import TrainableEpisodeTrace
 from heterospawn.orchestration.wideseek_actions import WIDESEEK_TOOL_SCHEMA_REVISION
 from heterospawn.orchestration.wideseek_episode import (
     WideSeekEpisodeOrchestrator,
@@ -60,6 +71,35 @@ from heterospawn.training.wideseek_reward import (
 
 Topology = Literal["shared", "independent"]
 JudgeMode = Literal["none", "minimax-development"]
+ComplianceSelection = tuple[tuple[WideSeekSplit, int], ...]
+WIDESEEK_COMPLIANCE_PROFILE_V1: ComplianceSelection = (
+    ("width_20k", 0),
+    ("width_20k", 3999),
+    ("width_20k", 7999),
+    ("width_20k", 11999),
+    ("width_20k", 15999),
+    ("width_20k", 19999),
+    ("depth_20k", 0),
+    ("depth_20k", 4999),
+    ("depth_20k", 9999),
+    ("depth_20k", 14999),
+    ("depth_20k", 19999),
+    ("hybrid_20k", 0),
+    ("hybrid_20k", 4999),
+    ("hybrid_20k", 9999),
+    ("hybrid_20k", 14999),
+    ("hybrid_20k", 19999),
+)
+
+
+class _ComplianceBackend(Protocol):
+    prompt_encoder: Any
+
+    def endpoint(self, policy_id: PolicyId) -> Any: ...
+
+    def rollout_revision(self, policy_id: PolicyId) -> RolloutRevision: ...
+
+    def adapter_hash(self, policy_id: PolicyId, *, rollout: bool = False) -> str: ...
 
 
 class _Utf8ToolCodec:
@@ -233,6 +273,324 @@ async def run_wideseek_rollout_smoke(
     }
     await asyncio.to_thread(_write_report, report_path, report)
     return report
+
+
+async def run_wideseek_compliance_baseline(
+    *,
+    topology: Topology,
+    task_selection: ComplianceSelection,
+    rollouts_per_task: int,
+    data_manifest_path: Path,
+    data_dir: Path,
+    service_url: str,
+    qdrant_url: str,
+    local_config: LocalLoraConfig,
+    report_path: Path,
+    tool_service: WideSeekLocalToolService | None = None,
+    backend: _ComplianceBackend | None = None,
+    do_sample: bool = True,
+    max_search_message_results: int = 3,
+    max_search_content_characters: int = 600,
+    max_access_characters: int = 800,
+) -> dict[str, Any]:
+    """Measure policy compliance and exact outcome without an optimizer update."""
+
+    if not task_selection or len(set(task_selection)) != len(task_selection):
+        raise ValueError("compliance task selection must be non-empty and unique")
+    if rollouts_per_task < 1:
+        raise ValueError("compliance baseline requires at least one rollout per task")
+
+    manifest = load_asset_manifest(data_manifest_path)
+    expected_by_split = {
+        split: next(
+            (
+                file
+                for file in manifest.files
+                if file.path == f"{split}.jsonl" and file.sha256 is not None
+            ),
+            None,
+        )
+        for split in ("width_20k", "depth_20k", "hybrid_20k")
+    }
+    requested_splits = tuple(dict.fromkeys(split for split, _ in task_selection))
+    datasets: dict[WideSeekSplit, WideSeekDataset] = {}
+    for split in requested_splits:
+        expected = expected_by_split[split]
+        if expected is None or expected.sha256 is None:
+            raise ValueError(f"{split} is absent from the trusted manifest")
+        datasets[split] = load_wideseek_dataset(
+            data_dir / f"{split}.jsonl",
+            split=split,
+            expected_sha256=expected.sha256,
+            revision=manifest.revision,
+        )
+    selected_tasks: list[tuple[WideSeekSplit, int, ResearchTask]] = []
+    for split, task_index in task_selection:
+        try:
+            task = datasets[split].tasks[task_index]
+        except IndexError:
+            raise ValueError(
+                f"WideSeek compliance task index is out of range: {split}:{task_index}"
+            ) from None
+        selected_tasks.append((split, task_index, task))
+
+    policy_ids = (
+        (PolicyId("shared"),) if topology == "shared" else (PolicyId("main"), PolicyId("sub"))
+    )
+    active_backend = backend or LocalHfLoraBackend.from_pretrained(
+        config=local_config,
+        policy_ids=policy_ids,
+    )
+    main_id = policy_ids[0]
+    sub_id = main_id if topology == "shared" else PolicyId("sub")
+    registry = PolicyRegistry(
+        (
+            RoleBinding(role="main", policy_id=main_id, trainable=False),
+            RoleBinding(role="sub", policy_id=sub_id, trainable=False),
+        ),
+        tuple((policy_id, active_backend.rollout_revision(policy_id)) for policy_id in policy_ids),
+    )
+    tools = tool_service or WideSeekLocalToolService(
+        WideSeekLocalConfig(service_url=service_url, qdrant_url=qdrant_url)
+    )
+    sampling_params: tuple[tuple[str, JsonScalar], ...] = (
+        (
+            ("max_new_tokens", local_config.max_new_tokens),
+            ("do_sample", True),
+            ("temperature", 1.0),
+            ("top_p", 1.0),
+            ("top_k", 0),
+        )
+        if do_sample
+        else (
+            ("max_new_tokens", local_config.max_new_tokens),
+            ("do_sample", False),
+        )
+    )
+    orchestrator = WideSeekEpisodeOrchestrator(
+        registry,
+        {
+            "main": active_backend.endpoint(main_id),
+            "sub": active_backend.endpoint(sub_id),
+        },
+        {
+            "main": active_backend.prompt_encoder,
+            "sub": active_backend.prompt_encoder,
+        },
+        tools,
+        max_concurrency=4,
+        max_search_message_results=max_search_message_results,
+        max_search_content_characters=max_search_content_characters,
+        max_access_characters=max_access_characters,
+        sampling_params=sampling_params,
+    )
+    evaluators = {split: WideSeekEvaluator(datasets[split]) for split in requested_splits}
+    initial_registry_revisions = registry.snapshot()
+    initial_backend_revisions = tuple(
+        (policy_id, active_backend.rollout_revision(policy_id)) for policy_id in policy_ids
+    )
+    initial_hashes = {
+        f"{policy_id}:{adapter_kind}": active_backend.adapter_hash(
+            policy_id,
+            rollout=adapter_kind == "rollout",
+        )
+        for policy_id in policy_ids
+        for adapter_kind in ("train", "rollout")
+    }
+    cuda_enabled = str(local_config.device).startswith("cuda")
+    torch = importlib.import_module("torch") if cuda_enabled else None
+    if torch is not None:
+        with torch.cuda.device(local_config.device):
+            torch.cuda.reset_peak_memory_stats()
+
+    records: list[dict[str, Any]] = []
+    started = time.perf_counter()
+    for split, task_index, task in selected_tasks:
+        evaluator = evaluators[split]
+        for rollout_index in range(rollouts_per_task):
+            identity = f"compliance:{split}:{task_index}:r{rollout_index}"
+            trace = await orchestrator.run(
+                task,
+                EpisodeId(identity),
+                RolloutId(identity),
+                registry.snapshot(),
+            )
+            evaluation = (
+                await evaluator.evaluate(
+                    task,
+                    trace.answer or "",
+                    request_id=identity,
+                )
+                if trace.status == "success"
+                else None
+            )
+            records.append(
+                _compliance_record(
+                    split=split,
+                    task_index=task_index,
+                    rollout_index=rollout_index,
+                    trace=trace,
+                    evaluation=evaluation,
+                )
+            )
+    elapsed = time.perf_counter() - started
+
+    final_registry_revisions = registry.snapshot()
+    final_backend_revisions = tuple(
+        (policy_id, active_backend.rollout_revision(policy_id)) for policy_id in policy_ids
+    )
+    final_hashes = {
+        f"{policy_id}:{adapter_kind}": active_backend.adapter_hash(
+            policy_id,
+            rollout=adapter_kind == "rollout",
+        )
+        for policy_id in policy_ids
+        for adapter_kind in ("train", "rollout")
+    }
+    revisions_unchanged = (
+        final_registry_revisions == initial_registry_revisions
+        and final_backend_revisions == initial_backend_revisions
+    )
+    adapters_unchanged = final_hashes == initial_hashes
+    peak_bytes = 0
+    gpu_name = None
+    if torch is not None:
+        device_index = torch.device(local_config.device).index or 0
+        gpu_name = torch.cuda.get_device_name(device_index)
+        with torch.cuda.device(local_config.device):
+            peak_bytes = int(torch.cuda.max_memory_allocated())
+
+    summary = _summarize_compliance(records)
+    summary["by_split"] = {
+        split: _summarize_compliance([record for record in records if record["split"] == split])
+        for split in requested_splits
+    }
+    report: dict[str, Any] = {
+        "schema_revision": "heterospawn-wideseek-compliance-v1",
+        "status": "passed",
+        "comparable_to_official": False,
+        "optimizer_updates": 0,
+        "topology": topology,
+        "selection_profile": canonical_digest(task_selection),
+        "task_selection": [
+            {"split": split, "task_index": task_index} for split, task_index in task_selection
+        ],
+        "rollouts_per_task": rollouts_per_task,
+        "model_id": local_config.model_id,
+        "model_revision": local_config.model_revision,
+        "model_identity_kind": local_config.base_model_identity_kind,
+        "model_identity": local_config.base_model_identity,
+        "quantization": local_config.quantization,
+        "gradient_checkpointing": local_config.gradient_checkpointing,
+        "enable_thinking": local_config.enable_thinking,
+        "seed": local_config.seed,
+        "sampling_params": dict(sampling_params),
+        "sampling_logprob_semantics": "raw-policy",
+        "tool_message_budgets": {
+            "search_results": max_search_message_results,
+            "search_content_characters": max_search_content_characters,
+            "access_characters": max_access_characters,
+        },
+        "environment_revision": tools.provider_revision,
+        "dataset_revision": manifest.revision,
+        "evaluator_revisions": {split: evaluators[split].revision for split in requested_splits},
+        "judge_mode": "none",
+        "judge_provider_requests": 0,
+        "elapsed_seconds": elapsed,
+        "device": local_config.device,
+        "gpu_name": gpu_name,
+        "peak_allocated_vram_bytes": peak_bytes,
+        "checks": {
+            "exact_token_logprob_alignment": all(
+                record["exact_token_logprob_alignment"] for record in records
+            ),
+            "stable_event_order": all(record["stable_event_order"] for record in records),
+            "weight_versions_unchanged": revisions_unchanged,
+            "adapter_hashes_unchanged": adapters_unchanged,
+        },
+        "summary": summary,
+        "episodes": records,
+    }
+    if not all(report["checks"].values()):
+        raise RuntimeError("WideSeek compliance baseline violated a rollout-only contract")
+    await asyncio.to_thread(_write_report, report_path, report)
+    return report
+
+
+def _compliance_record(
+    *,
+    split: WideSeekSplit,
+    task_index: int,
+    rollout_index: int,
+    trace: TrainableEpisodeTrace,
+    evaluation: WideSeekEvaluation | None,
+) -> dict[str, Any]:
+    stop_reasons = Counter(str(step.stop_reason) for step in trace.model_steps)
+    tool_counts = Counter(
+        f"{outcome.tool_name}:{outcome.status}" for outcome in trace.tool_outcomes
+    )
+    return {
+        "split": split,
+        "task_index": task_index,
+        "rollout_index": rollout_index,
+        "task_id": str(trace.task_id),
+        "status": trace.status,
+        "failure_code": trace.failure_code,
+        "format_ok": evaluation.format_ok if evaluation is not None else False,
+        "outcome_score": evaluation.outcome_score if evaluation is not None else 0.0,
+        "spawn_count": trace.spawn_count,
+        "spawn_rounds": len(trace.spawn_rounds),
+        "invalid_main_attempts": trace.invalid_main_attempts,
+        "failed_subs": trace.failed_subs,
+        "model_steps": len(trace.model_steps),
+        "main_model_steps": sum(step.agent_role == "main" for step in trace.model_steps),
+        "sub_model_steps": sum(step.agent_role == "sub" for step in trace.model_steps),
+        "tool_counts": dict(sorted(tool_counts.items())),
+        "stop_reasons": dict(sorted(stop_reasons.items())),
+        "length_truncated": stop_reasons["length"] > 0,
+        "exact_token_logprob_alignment": all(
+            len(step.response_ids) == len(step.response_log_probs) for step in trace.model_steps
+        ),
+        "stable_event_order": tuple(event.event_index for event in trace.events)
+        == tuple(range(len(trace.events))),
+    }
+
+
+def _summarize_compliance(records: list[dict[str, Any]]) -> dict[str, Any]:
+    episodes = len(records)
+    scores = [float(record["outcome_score"]) for record in records]
+    spawn_counts = Counter(str(record["spawn_count"]) for record in records)
+    statuses = Counter(str(record["status"]) for record in records)
+    failures = Counter(
+        str(record["failure_code"]) for record in records if record["failure_code"] is not None
+    )
+    return {
+        "episodes": episodes,
+        "success_rate": _rate(record["status"] == "success" for record in records),
+        "format_ok_rate": _rate(record["format_ok"] for record in records),
+        "nonzero_outcome_rate": _rate(score > 0 for score in scores),
+        "outcome_mean": statistics.fmean(scores),
+        "outcome_population_std": statistics.pstdev(scores),
+        "spawn_rate": _rate(int(record["spawn_count"]) > 0 for record in records),
+        "zero_spawn_rate": _rate(int(record["spawn_count"]) == 0 for record in records),
+        "invalid_main_episode_rate": _rate(
+            int(record["invalid_main_attempts"]) > 0 for record in records
+        ),
+        "failed_sub_episode_rate": _rate(int(record["failed_subs"]) > 0 for record in records),
+        "length_truncation_rate": _rate(record["length_truncated"] for record in records),
+        "status_counts": dict(sorted(statuses.items())),
+        "failure_counts": dict(sorted(failures.items())),
+        "spawn_count_histogram": dict(sorted(spawn_counts.items())),
+        "model_steps": sum(int(record["model_steps"]) for record in records),
+        "tool_calls": sum(
+            sum(int(count) for count in record["tool_counts"].values()) for record in records
+        ),
+    }
+
+
+def _rate(values: Iterable[object]) -> float:
+    materialized = tuple(bool(value) for value in values)
+    return sum(materialized) / len(materialized) if materialized else 0.0
 
 
 async def run_wideseek_train_smoke(

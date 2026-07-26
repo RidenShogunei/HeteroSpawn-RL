@@ -8,9 +8,10 @@ import json
 import sys
 from collections.abc import Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from heterospawn import __version__
+from heterospawn.benchmarks.wideseek import WideSeekSplit
 from heterospawn.benchmarks.xbench import BenchmarkTask, load_xbench
 from heterospawn.domain.ids import EpisodeId, PolicyId, TaskId
 from heterospawn.evaluation.api_pilot import (
@@ -273,6 +274,85 @@ def build_parser() -> argparse.ArgumentParser:
         "--report",
         type=Path,
         default=Path("artifacts/wideseek-rollout-smoke/report.json"),
+    )
+    wideseek_compliance = subparsers.add_parser(
+        "wideseek-compliance-baseline",
+        help="measure fixed-task WideSeek policy compliance without updating weights",
+    )
+    wideseek_compliance.add_argument(
+        "--topology",
+        choices=("shared", "independent"),
+        default="shared",
+    )
+    wideseek_compliance.add_argument(
+        "--task",
+        action="append",
+        type=_parse_wideseek_compliance_task,
+        dest="tasks",
+        help=(
+            "split:index selection; repeat for multiple tasks "
+            "(default: fixed 16-task qwen3 pilot profile)"
+        ),
+    )
+    wideseek_compliance.add_argument("--rollouts-per-task", type=int, default=1)
+    wideseek_compliance.add_argument(
+        "--data-manifest",
+        type=Path,
+        default=Path("manifests/wideseek-train-data.json"),
+    )
+    wideseek_compliance.add_argument(
+        "--data-dir",
+        type=Path,
+        default=Path("artifacts/wideseek-assets/train-data"),
+    )
+    wideseek_compliance.add_argument(
+        "--service-url",
+        default="http://127.0.0.1:8000",
+    )
+    wideseek_compliance.add_argument(
+        "--qdrant-url",
+        default="http://127.0.0.1:6333",
+    )
+    wideseek_compliance.add_argument("--device", default="cuda:0")
+    wideseek_compliance.add_argument(
+        "--model-profile",
+        choices=("qwen2.5-0.5b", "qwen3-4b"),
+        default="qwen3-4b",
+    )
+    wideseek_compliance.add_argument("--model-path", type=Path)
+    wideseek_compliance.add_argument(
+        "--model-manifest",
+        type=Path,
+        help="trusted multi-file model manifest; required by the qwen3-4b profile",
+    )
+    wideseek_compliance.add_argument(
+        "--allow-model-download",
+        action="store_true",
+        help="required acknowledgement when no verified local model path is supplied",
+    )
+    wideseek_compliance.add_argument("--max-sequence-length", type=int, default=4096)
+    wideseek_compliance.add_argument("--max-new-tokens", type=int, default=512)
+    wideseek_compliance.add_argument(
+        "--do-sample",
+        action="store_true",
+        help="sample from the raw policy instead of using greedy generation",
+    )
+    wideseek_compliance.add_argument("--max-search-message-results", type=int, default=3)
+    wideseek_compliance.add_argument(
+        "--max-search-content-characters",
+        type=int,
+        default=600,
+    )
+    wideseek_compliance.add_argument("--max-access-characters", type=int, default=800)
+    wideseek_compliance.add_argument(
+        "--artifact-dir",
+        type=Path,
+        default=Path("artifacts/wideseek-compliance/checkpoints"),
+    )
+    wideseek_compliance.add_argument(
+        "--report",
+        type=Path,
+        default=Path("artifacts/wideseek-compliance/report.json"),
     )
     wideseek_train = subparsers.add_parser(
         "wideseek-train-smoke",
@@ -547,6 +627,41 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         print(json.dumps(report, ensure_ascii=False, sort_keys=True))
         return 0
+    if args.command == "wideseek-compliance-baseline":
+        if args.model_path is None and not args.allow_model_download:
+            raise SystemExit("--allow-model-download is required when --model-path is omitted")
+        from heterospawn.training.wideseek_smoke import (
+            WIDESEEK_COMPLIANCE_PROFILE_V1,
+            run_wideseek_compliance_baseline,
+        )
+
+        report = asyncio.run(
+            run_wideseek_compliance_baseline(
+                topology=args.topology,
+                task_selection=tuple(args.tasks or WIDESEEK_COMPLIANCE_PROFILE_V1),
+                rollouts_per_task=args.rollouts_per_task,
+                data_manifest_path=args.data_manifest,
+                data_dir=args.data_dir,
+                service_url=args.service_url,
+                qdrant_url=args.qdrant_url,
+                local_config=_local_lora_config(
+                    model_profile=args.model_profile,
+                    device=args.device,
+                    model_path=args.model_path,
+                    model_manifest=args.model_manifest,
+                    artifact_dir=args.artifact_dir,
+                    max_sequence_length=args.max_sequence_length,
+                    max_new_tokens=args.max_new_tokens,
+                ),
+                report_path=args.report,
+                do_sample=args.do_sample,
+                max_search_message_results=args.max_search_message_results,
+                max_search_content_characters=args.max_search_content_characters,
+                max_access_characters=args.max_access_characters,
+            )
+        )
+        print(json.dumps(report, ensure_ascii=False, sort_keys=True))
+        return 0
     if args.command == "wideseek-train-smoke":
         if args.model_path is None and not args.allow_model_download:
             raise SystemExit("--allow-model-download is required when --model-path is omitted")
@@ -586,6 +701,19 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(json.dumps(report, ensure_ascii=False, sort_keys=True))
         return 0
     return 0
+
+
+def _parse_wideseek_compliance_task(value: str) -> tuple[WideSeekSplit, int]:
+    split_text, separator, index_text = value.partition(":")
+    if separator != ":" or split_text not in {"width_20k", "depth_20k", "hybrid_20k"}:
+        raise argparse.ArgumentTypeError("task must use split:index")
+    try:
+        index = int(index_text)
+    except ValueError:
+        raise argparse.ArgumentTypeError("task index must be an integer") from None
+    if index < 0:
+        raise argparse.ArgumentTypeError("task index cannot be negative")
+    return cast(WideSeekSplit, split_text), index
 
 
 def _local_lora_config(

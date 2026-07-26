@@ -144,3 +144,10 @@ This file records milestone-level events. Fine-grained work remains in GitHub is
   adapter change despite a non-empty optimizer transaction. This closes the real independent
   architecture contract, not the non-zero Sub learning gate; no credential was available in the
   runtime, so no development Judge call was attempted.
+- Added a rollout-only Qwen3 compliance command with a fixed 16-task cross-split profile, exact
+  trajectory/event checks, unchanged revision/adapter assertions, split summaries, and a
+  reference-safe report. It performs no optimizer update or Judge call.
+- Ran the profile against the complete offline environment. All episodes chose legal spawn and
+  produced 55 real Search/Access calls, but only one of 16 answers passed format and received a
+  non-zero exact outcome. This rejects immediate direct-RL scaling and selects a small
+  tool/evidence/output-format warm-start SFT as the next gate.

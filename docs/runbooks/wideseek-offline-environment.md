@@ -105,6 +105,39 @@ heterospawn wideseek-rollout-smoke \
   --report artifacts/wideseek-rollout-smoke/report.json
 ```
 
+Before updating weights, measure the base policy on the fixed compliance profile:
+
+```bash
+heterospawn wideseek-compliance-baseline \
+  --topology shared \
+  --data-dir "$HOME/heterospawn-runtime/wideseek/train-data" \
+  --model-profile qwen3-4b \
+  --model-path "$HOME/heterospawn-runtime/models/Qwen3-4B" \
+  --model-manifest manifests/qwen3-4b.json \
+  --device cuda:0 \
+  --max-sequence-length 4096 \
+  --max-new-tokens 512 \
+  --do-sample \
+  --report "$HOME/heterospawn-runtime/results/compliance/report.json"
+```
+
+The default profile selects 16 fixed, answer-independent task positions across `width_20k`,
+`depth_20k`, and `hybrid_20k`, with one rollout per task. It invokes no Judge and performs zero
+optimizer updates. The report contains only task identifiers, scalar/count metrics, revisions,
+and contract checks; prompts, reference answers, retrieved content, token arrays, and generated
+text remain absent. The command fails if token/log-prob alignment or stable event ordering fails,
+or if any policy revision or adapter hash changes.
+
+Use repeated `--task split:index` arguments to run an explicitly recorded alternative selection,
+and `--rollouts-per-task` to change the repeat count. Selection changes are reflected in the
+report digest. Treat the result as a readiness diagnostic, not an official benchmark score:
+
+- legal spawn/tool use plus measurable exact outcome and acceptable formatting supports a direct
+  short RL pilot;
+- consistent legal actions but near-zero format/outcome indicates a small tool/output-format SFT
+  warm start before RL;
+- contract-check failure blocks both paths until the rollout implementation is fixed.
+
 Then run both short training topologies from separate transaction directories. Reusing a
 transaction directory with different inputs is intentionally rejected:
 

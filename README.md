@@ -112,6 +112,11 @@ the pinned upstream retrieval server, then runs:
 ```bash
 heterospawn wideseek-check-environment
 heterospawn wideseek-rollout-smoke
+heterospawn wideseek-compliance-baseline \
+  --model-profile qwen3-4b \
+  --model-path /absolute/path/to/Qwen3-4B \
+  --model-manifest manifests/qwen3-4b.json \
+  --do-sample
 heterospawn wideseek-train-smoke \
   --topology shared \
   --model-profile qwen3-4b \
@@ -124,6 +129,12 @@ heterospawn wideseek-train-smoke \
   --max-access-characters 800 \
   --do-sample
 ```
+
+The compliance baseline runs a fixed, answer-independent set of 16 tasks spanning width, depth,
+and hybrid splits. It performs no optimizer update and verifies that policy revisions and adapter
+hashes remain unchanged while measuring legal spawn, tool use, answer format, exact outcome, and
+truncation. Use its redacted report to decide whether the base policy is ready for a direct RL
+pilot or first needs a small tool/output-format warm start.
 
 See the [offline deployment runbook](docs/runbooks/wideseek-offline-environment.md) before
 allocating disk, host RAM, and one retrieval GPU.
