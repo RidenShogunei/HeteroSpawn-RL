@@ -22,7 +22,6 @@ from heterospawn.training.wideseek_smoke import (
     _Utf8ToolCodec,
     run_wideseek_compliance_baseline,
     run_wideseek_rollout_smoke,
-    run_wideseek_train_smoke,
 )
 
 
@@ -245,27 +244,18 @@ def test_compliance_cli_parses_explicit_split_indices() -> None:
         build_parser().parse_args(["wideseek-compliance-baseline", "--task", "unknown:0"])
 
 
-@pytest.mark.asyncio
-async def test_independent_train_rejects_one_shared_checkpoint_before_loading_assets(
-    tmp_path: Path,
-) -> None:
-    with pytest.raises(ValueError, match="only the shared topology"):
-        await run_wideseek_train_smoke(
-            topology="independent",
-            split="width_20k",
-            task_indices=(1,),
-            rollouts_per_task=2,
-            data_manifest_path=tmp_path / "missing-manifest.json",
-            data_dir=tmp_path / "missing-data",
-            service_url="http://unused.invalid",
-            qdrant_url="http://unused.invalid",
-            local_config=LocalLoraConfig(
-                device="cpu",
-                dtype="float32",
-                artifact_dir=tmp_path / "checkpoints",
-            ),
-            judge_mode="none",
-            transaction_dir=tmp_path / "transactions",
-            report_path=tmp_path / "report.json",
-            checkpoint_dir=tmp_path / "checkpoint",
-        )
+def test_independent_train_accepts_explicit_shared_checkpoint_fork() -> None:
+    args = build_parser().parse_args(
+        [
+            "wideseek-train-smoke",
+            "--topology",
+            "independent",
+            "--checkpoint-dir",
+            "shared-checkpoint",
+            "--model-path",
+            "model",
+        ]
+    )
+
+    assert args.topology == "independent"
+    assert args.checkpoint_dir == Path("shared-checkpoint")

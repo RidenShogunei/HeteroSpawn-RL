@@ -625,8 +625,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--checkpoint-dir",
         type=Path,
         help=(
-            "restore and explicitly sync one verified shared-policy LocalHF checkpoint "
-            "before the RL cycle"
+            "restore one verified shared-policy checkpoint, or explicitly fork it into "
+            "independent Main/Sub lineages, before the RL cycle"
         ),
     )
     wideseek_train.add_argument(
@@ -1040,8 +1040,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             raise SystemExit("--allow-model-download is required when --model-path is omitted")
         if args.judge == "minimax-development" and not args.allow_network:
             raise SystemExit("--allow-network is required for MiniMax development Judge calls")
-        if args.checkpoint_dir is not None and args.topology != "shared":
-            raise SystemExit("--checkpoint-dir currently requires --topology shared")
         from heterospawn.training.wideseek_smoke import run_wideseek_train_smoke
 
         report = asyncio.run(
