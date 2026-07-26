@@ -5,6 +5,8 @@ import importlib
 import os
 from pathlib import Path
 from typing import Any, ClassVar, Literal
+from urllib.parse import unquote, urlparse
+from urllib.request import url2pathname
 
 import pytest
 
@@ -82,6 +84,7 @@ def _backend(
     *,
     dtype: str = "float32",
     architecture: str = "qwen2",
+    policy_ids: tuple[PolicyId, ...] = (PolicyId("main"), PolicyId("sub")),
 ) -> LocalHfLoraBackend:
     config_class = transformers.Qwen3Config if architecture == "qwen3" else transformers.Qwen2Config
     model_class = (
@@ -115,7 +118,7 @@ def _backend(
         ),
         model=model,
         tokenizer=TinyTokenizer(),
-        policy_ids=(PolicyId("main"), PolicyId("sub")),
+        policy_ids=policy_ids,
     )
 
 
@@ -374,6 +377,147 @@ async def test_supervised_update_is_role_balanced_idempotent_and_restorable(
 
 
 @pytest.mark.asyncio
+async def test_shared_checkpoint_forks_into_independent_policy_lineages(
+    tmp_path: Path,
+) -> None:
+    shared = PolicyId("shared")
+    main = PolicyId("main")
+    sub = PolicyId("sub")
+    source_backend = _backend(
+        tmp_path / "source",
+        policy_ids=(shared,),
+    )
+    source_revision = source_backend.rollout_revision(shared)
+    examples = materialize_supervised_conversations(
+        (
+            _supervised_conversation("main", "main_final", "answer"),
+            _supervised_conversation("sub", "sub_summary", "evidence"),
+        ),
+        source_backend.prompt_encoder,
+    )
+    batch = build_supervised_training_batch(
+        batch_id="shared-sft-source",
+        target_policy_id=shared,
+        expected_base_version=source_revision.weight_version,
+        examples=examples,
+    )
+    source_update = await source_backend.update_supervised(
+        shared,
+        batch,
+        source_revision.weight_version,
+    )
+    source_hash = source_backend.adapter_hash(shared)
+
+    backend = _backend(tmp_path / "forked")
+    old_main_rollout = backend.rollout_revision(main)
+    old_sub_rollout = backend.rollout_revision(sub)
+    forked = await backend.fork_checkpoint(
+        source_update.checkpoint,
+        (main, sub),
+    )
+    main_checkpoint, sub_checkpoint = forked
+
+    assert backend.adapter_hash(main) == source_hash
+    assert backend.adapter_hash(sub) == source_hash
+    assert backend.rollout_revision(main) == old_main_rollout
+    assert backend.rollout_revision(sub) == old_sub_rollout
+    assert main_checkpoint.policy_id == main
+    assert sub_checkpoint.policy_id == sub
+    assert main_checkpoint.weight_version.optimizer_step == 1
+    assert sub_checkpoint.weight_version.optimizer_step == 1
+    assert (
+        main_checkpoint.weight_version.checkpoint_digest
+        != sub_checkpoint.weight_version.checkpoint_digest
+    )
+    expected_lineage = {
+        "kind": "policy_fork",
+        "source_policy_id": "shared",
+        "source_optimizer_step": 1,
+        "source_checkpoint_digest": source_update.trained_version.checkpoint_digest,
+        "source_optimizer_state_digest": source_update.checkpoint.optimizer_state_digest,
+    }
+    assert backend.checkpoint_lineage(main_checkpoint) == expected_lineage
+    assert backend.checkpoint_lineage(sub_checkpoint) == expected_lineage
+    source_optimizer = torch.load(
+        _checkpoint_path(source_update.checkpoint.uri) / "optimizer.pt",
+        map_location="cpu",
+        weights_only=True,
+    )
+    main_optimizer = torch.load(
+        _checkpoint_path(main_checkpoint.uri) / "optimizer.pt",
+        map_location="cpu",
+        weights_only=True,
+    )
+    sub_optimizer = torch.load(
+        _checkpoint_path(sub_checkpoint.uri) / "optimizer.pt",
+        map_location="cpu",
+        weights_only=True,
+    )
+    _assert_optimizer_state_equal(source_optimizer, main_optimizer)
+    _assert_optimizer_state_equal(source_optimizer, sub_optimizer)
+
+    main_synced = await backend.sync_rollout_weights(main, main_checkpoint.weight_version)
+    assert backend.adapter_hash(main, rollout=True) == source_hash
+    assert backend.rollout_revision(sub) == old_sub_rollout
+    sub_synced = await backend.sync_rollout_weights(sub, sub_checkpoint.weight_version)
+    assert backend.adapter_hash(sub, rollout=True) == source_hash
+    assert main_synced.weight_version.policy_id == main
+    assert sub_synced.weight_version.policy_id == sub
+
+    sub_hash_before_main_update = backend.adapter_hash(sub)
+    sub_version_before_main_update = backend.weight_version(sub)
+    request = _request(backend, role="main", request_id="forked-main")
+    result = await backend.endpoint(main).generate(request, main_synced)
+    update_batch = TrainingBatchBuilder().build(
+        batch_id="forked-main-update",
+        phase="main_update",
+        target_policy_id=main,
+        expected_base_version=main_synced.weight_version,
+        steps=(_step(request, result, step_id="forked-main-step"),),
+        episode_advantages={request.episode_id: 1.0},
+    )
+    main_update = await backend.update_policy(
+        main,
+        update_batch,
+        main_synced.weight_version,
+    )
+
+    assert main_update.trained_version.optimizer_step == 2
+    assert backend.weight_version(sub) == sub_version_before_main_update
+    assert backend.adapter_hash(sub) == sub_hash_before_main_update
+
+
+def _assert_optimizer_state_equal(left: Any, right: Any) -> None:
+    if isinstance(left, torch.Tensor):
+        assert isinstance(right, torch.Tensor)
+        assert left.dtype == right.dtype
+        assert left.shape == right.shape
+        assert torch.equal(left, right)
+        return
+    if isinstance(left, dict):
+        assert isinstance(right, dict)
+        assert left.keys() == right.keys()
+        for key in left:
+            _assert_optimizer_state_equal(left[key], right[key])
+        return
+    if isinstance(left, (list, tuple)):
+        assert isinstance(right, type(left))
+        assert len(left) == len(right)
+        for left_item, right_item in zip(left, right, strict=True):
+            _assert_optimizer_state_equal(left_item, right_item)
+        return
+    assert left == right
+
+
+def _checkpoint_path(uri: str) -> Path:
+    parsed = urlparse(uri)
+    path = url2pathname(unquote(parsed.path))
+    if os.name == "nt" and path.startswith("\\") and len(path) > 2 and path[2] == ":":
+        path = path[1:]
+    return Path(path)
+
+
+@pytest.mark.asyncio
 async def test_generation_accepts_only_prompt_revisions_issued_for_tool_schema(
     tmp_path: Path,
 ) -> None:
@@ -497,3 +641,4 @@ async def test_all_lora_adapters_remain_float32_with_fp16_base(tmp_path: Path) -
         assert tensors
         assert {tensor.dtype for tensor in tensors.values()} == {torch.float32}
         assert all(torch.isfinite(tensor).all() for tensor in tensors.values())
+
