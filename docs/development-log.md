@@ -223,4 +223,3 @@ This file records milestone-level events. Fine-grained work remains in GitHub is
   optimizer-state copying, canonical source provenance in each target manifest, and independent
   synchronization barriers. The WideSeek train smoke now accepts the audited shared checkpoint
   for either direct shared restore or explicit independent initialization.
-
