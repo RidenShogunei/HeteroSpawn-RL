@@ -346,14 +346,27 @@ async def test_supervised_update_is_role_balanced_idempotent_and_restorable(
             main_revision.weight_version,
         )
 
-    synced = await backend.sync_rollout_weights(main, update.trained_version)
+    second_batch = build_supervised_training_batch(
+        batch_id="shared-sft-update-2",
+        target_policy_id=main,
+        expected_base_version=update.trained_version,
+        examples=examples,
+    )
+    second_update = await backend.update_supervised(
+        main,
+        second_batch,
+        update.trained_version,
+    )
+    assert second_update.trained_version.optimizer_step == 2
+
+    synced = await backend.sync_rollout_weights(main, second_update.trained_version)
     assert synced.replica_set_revision == main_revision.replica_set_revision + 1
     assert backend.adapter_hash(main, rollout=True) == backend.adapter_hash(main)
 
     replacement = _backend(tmp_path / "replacement")
-    restored = await replacement.restore_checkpoint(update.checkpoint)
+    restored = await replacement.restore_checkpoint(second_update.checkpoint)
     recovered = await replacement.sync_rollout_weights(main, restored)
-    assert restored == update.trained_version
+    assert restored == second_update.trained_version
     assert recovered.weight_version == synced.weight_version
     assert recovered.deployment_id != synced.deployment_id
     assert replacement.adapter_hash(main) == backend.adapter_hash(main)

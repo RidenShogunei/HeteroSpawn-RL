@@ -113,3 +113,39 @@ Do not:
 
 After the contract smoke passes, run a separately recorded small warm start followed by the
 unchanged fixed 16-task compliance profile as the declared readiness gate.
+
+## Multi-step warm start
+
+The formal warm start uses a training-only sequence cap while preserving the 4,096-token rollout
+context:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 heterospawn wideseek-sft-train \
+  --split hybrid_20k \
+  --task-limit 192 \
+  --tasks-per-step 4 \
+  --epochs 1 \
+  --training-max-sequence-length 2304 \
+  --max-sequence-length 4096 \
+  --model-profile qwen3-4b \
+  --model-path /absolute/path/to/Qwen3-4B \
+  --model-manifest manifests/qwen3-4b.json \
+  --data-dir /absolute/path/to/wideseek-train-data \
+  --run-compliance \
+  --service-url http://127.0.0.1:8000 \
+  --qdrant-url http://127.0.0.1:6333 \
+  --artifact-dir artifacts/wideseek-sft-train/checkpoints \
+  --report artifacts/wideseek-sft-train/report.json \
+  --compliance-report artifacts/wideseek-sft-train/compliance.json
+```
+
+When explicit `--task-index` values are omitted, selection walks answer-independent dataset
+positions, excludes the fixed compliance indices, and skips an entire task if any of its examples
+exceeds the training-only cap. The report records selected/skipped indices and the deterministic
+schedule digest. Each task batch contains its Main final target and all associated Sub summaries,
+so both behaviors remain present in every optimizer step. The final checkpoint is synchronized
+and restored before the unchanged held-out compliance run.
+
+Do not reduce `--max-sequence-length` to work around SFT memory pressure. Use
+`--training-max-sequence-length` for that purpose; otherwise the post-SFT run is not comparable to
+the 4,096-token baseline.

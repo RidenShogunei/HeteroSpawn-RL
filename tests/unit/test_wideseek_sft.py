@@ -24,6 +24,8 @@ from heterospawn.training.wideseek_sft import (
     materialize_supervised_conversations,
 )
 from heterospawn.training.wideseek_sft_smoke import (
+    _materialize_task_groups,
+    _planned_task_batches,
     _validate_compliance_selection,
 )
 
@@ -252,3 +254,57 @@ def test_sft_selection_cannot_overlap_fixed_compliance_profile() -> None:
         _validate_compliance_selection("hybrid_20k", (0, 1))
 
     _validate_compliance_selection("hybrid_20k", (1, 2, 3))
+
+
+def test_multistep_sft_plan_is_deterministic_complete_and_epoch_bounded() -> None:
+    task_indices = (1, 2, 3, 4, 6, 7, 8)
+
+    first = _planned_task_batches(
+        task_indices,
+        tasks_per_step=3,
+        epochs=2,
+        seed=20260722,
+    )
+    second = _planned_task_batches(
+        task_indices,
+        tasks_per_step=3,
+        epochs=2,
+        seed=20260722,
+    )
+
+    assert first == second
+    assert len(first) == 6
+    for epoch in (0, 1):
+        epoch_batches = tuple(batch for item_epoch, _, batch in first if item_epoch == epoch)
+        assert sorted(index for batch in epoch_batches for index in batch) == sorted(task_indices)
+        assert all(1 <= len(batch) <= 3 for batch in epoch_batches)
+        assert [step for item_epoch, step, _ in first if item_epoch == epoch] == [0, 1, 2]
+    assert tuple(batch for epoch, _, batch in first if epoch == 0) != tuple(
+        batch for epoch, _, batch in first if epoch == 1
+    )
+
+    with pytest.raises(ValueError, match="unique"):
+        _planned_task_batches((1, 1), tasks_per_step=1, epochs=1, seed=0)
+
+
+def test_automatic_sft_selection_excludes_compliance_indices(tmp_path: Path) -> None:
+    path = tmp_path / "hybrid_20k.jsonl"
+    digest, _ = _write_hybrid_fixture(path)
+    dataset = load_wideseek_dataset(
+        path,
+        split="hybrid_20k",
+        expected_sha256=digest,
+    )
+
+    groups, skipped = _materialize_task_groups(
+        dataset=dataset,
+        explicit_task_indices=(),
+        task_limit=1,
+        constructor=WideSeekRoleSftConstructor(max_workers=2),
+        codec=_DeterministicSupervisedCodec(),
+        training_max_sequence_length=100_000,
+        exclude_compliance=True,
+    )
+
+    assert tuple(group.task_index for group in groups) == (1,)
+    assert skipped == ()
