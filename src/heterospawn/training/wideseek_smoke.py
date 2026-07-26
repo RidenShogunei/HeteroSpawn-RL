@@ -1303,4 +1303,3 @@ def _write_report(path: Path, report: dict[str, Any]) -> None:
         encoding="utf-8",
     )
     temporary.replace(path)
-
