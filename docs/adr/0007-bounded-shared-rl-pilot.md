@@ -32,6 +32,13 @@ claiming that the readiness gate or the research result is complete.
   transaction identities.
 - Keep the total sequence limit at 4,096 and use the measured experimental generation allowance
   of 1,024. The repository default remains 512; this ADR authorizes only the named pilot profile.
+- Use PyTorch SDPA for the Qwen3-4B Turing profile instead of eager attention. This is an
+  explicit backend setting which preserves the causal attention and loss contract while keeping
+  4K backward passes within the 2080 Ti memory envelope. Use explicit non-reentrant gradient
+  checkpointing so PyTorch can stop recomputation once all required activations are available.
+  For Qwen3 training forwards, materialize only the final response-length-plus-one logits needed
+  for the exact shifted response loss; prompt logits that cannot contribute to the loss are not
+  allocated.
 - Use raw-policy sampling and eight complete rollouts for each of eight answer-independent,
   SFT-disjoint `width_20k` positions:
   `1, 2500, 5000, 7500, 10000, 12500, 15000, 17500`.

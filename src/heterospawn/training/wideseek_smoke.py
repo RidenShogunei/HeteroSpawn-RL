@@ -67,6 +67,7 @@ from heterospawn.training.registry import PolicyRegistry
 from heterospawn.training.transactions import (
     FilePhaseTransactionStore,
     PhaseTransactionContext,
+    PhaseTransactionManager,
 )
 from heterospawn.training.wideseek_reward import (
     WideSeekRewardConfig,
@@ -94,6 +95,172 @@ WIDESEEK_COMPLIANCE_PROFILE_V1: ComplianceSelection = (
     ("hybrid_20k", 14999),
     ("hybrid_20k", 19999),
 )
+
+
+async def run_wideseek_phase_recovery(
+    *,
+    transaction_id: str,
+    transaction_dir: Path,
+    local_config: LocalLoraConfig,
+    report_path: Path,
+    require_learning_signal: bool = False,
+) -> dict[str, Any]:
+    """Recover one durable phase without replaying its rollout environment."""
+
+    store = FilePhaseTransactionStore(transaction_dir)
+    transaction_input = store.load_input(transaction_id)
+    if transaction_input is None:
+        raise ValueError("phase transaction input does not exist")
+    target = transaction_input.target_policy_id
+    backend = LocalHfLoraBackend.from_pretrained(
+        config=local_config,
+        policy_ids=(target,),
+    )
+    await backend.restore_checkpoint(transaction_input.base_checkpoint)
+    checkpoint_config = backend.checkpoint_config(transaction_input.base_checkpoint)
+    runtime_config = local_config.model_dump(
+        mode="json",
+        exclude={
+            "artifact_dir",
+            "model_path",
+            "model_manifest_path",
+            "expected_model_weight_sha256",
+            "expected_model_manifest_digest",
+        },
+    )
+    mismatched_config = sorted(
+        key for key, value in checkpoint_config.items() if runtime_config.get(key) != value
+    )
+    if mismatched_config:
+        raise ValueError(
+            "recovery runtime differs from checkpoint fields: " + ", ".join(mismatched_config)
+        )
+    runtime_config_extensions = sorted(set(runtime_config) - set(checkpoint_config))
+    base_adapter_hash = backend.adapter_hash(target)
+    registry = PolicyRegistry(
+        (
+            RoleBinding(role="main", policy_id=target, trainable=True),
+            RoleBinding(role="sub", policy_id=target, trainable=True),
+        ),
+        transaction_input.base_policy_revisions,
+    )
+    manager = PhaseTransactionManager(
+        store=store,
+        backend=backend,
+        registry=registry,
+        context=transaction_input.context,
+        evidence_provider=lambda _phase: transaction_input.evidence,
+    )
+    pending_before = store.load_pending(transaction_id)
+    commit_before = store.load_commit(transaction_id)
+    started = time.perf_counter()
+    commit = await manager.recover(transaction_id)
+    elapsed = time.perf_counter() - started
+    pending = store.load_pending(transaction_id)
+    committed_checkpoint = commit.committed_checkpoint or commit.base_checkpoint
+    final_adapter_hash = backend.adapter_hash(target)
+    restored = await backend.restore_checkpoint(committed_checkpoint)
+
+    update = pending.update if pending is not None else None
+    metrics = dict(update.metrics) if update is not None else {}
+    samples = transaction_input.batch.samples
+    group_values: dict[str, dict[str, float]] = {}
+    group_sample_counts: Counter[str] = Counter()
+    for sample in samples:
+        task_id = str(sample.task_id)
+        group_sample_counts[task_id] += 1
+        episode_values = group_values.setdefault(task_id, {})
+        prior = episode_values.setdefault(str(sample.episode_id), sample.advantage)
+        if not math.isclose(prior, sample.advantage, rel_tol=0.0, abs_tol=1e-12):
+            raise RuntimeError("one episode contains inconsistent system advantages")
+    advantage_groups = [
+        {
+            "task_id": task_id,
+            "episode_count": len(episode_values),
+            "sample_count": group_sample_counts[task_id],
+            "advantage_mean": statistics.fmean(episode_values.values()),
+            "advantage_population_std": statistics.pstdev(episode_values.values()),
+            "advantage_min": min(episode_values.values()),
+            "advantage_max": max(episode_values.values()),
+            "degenerate": len(set(episode_values.values())) == 1,
+        }
+        for task_id, episode_values in sorted(group_values.items())
+    ]
+    gradient_norm = float(metrics.get("gradient_norm", 0.0))
+    adapter_changed = base_adapter_hash != final_adapter_hash
+    learning_signal = {
+        "nondegenerate_advantage_group": any(not group["degenerate"] for group in advantage_groups),
+        "nonzero_advantages": any(sample.advantage != 0.0 for sample in samples),
+        "finite_nonzero_gradient": math.isfinite(gradient_norm) and gradient_norm > 0.0,
+        "adapter_changed": adapter_changed,
+    }
+    update_advanced_once = (
+        update is None
+        and commit.empty_sub_batch
+        and commit.rollout_revision.weight_version
+        == transaction_input.base_checkpoint.weight_version
+    ) or (
+        update is not None
+        and update.base_version == transaction_input.base_checkpoint.weight_version
+        and update.trained_version.optimizer_step == update.base_version.optimizer_step + 1
+    )
+    report: dict[str, Any] = {
+        "schema_revision": "heterospawn-wideseek-phase-recovery-v1",
+        "status": (
+            "passed" if not require_learning_signal or all(learning_signal.values()) else "failed"
+        ),
+        "transaction_id": transaction_id,
+        "phase": transaction_input.phase,
+        "input_digest": transaction_input.input_digest,
+        "batch_digest": transaction_input.batch.batch_digest,
+        "commit_digest": commit.manifest_digest,
+        "records_present_before_recovery": {
+            "pending": pending_before is not None,
+            "commit": commit_before is not None,
+        },
+        "commit_unchanged": commit_before is None or commit_before == commit,
+        "sample_count": len(samples),
+        "episode_count": len({sample.episode_id for sample in samples}),
+        "nonzero_advantage_samples": sum(sample.advantage != 0.0 for sample in samples),
+        "maximum_training_sequence_tokens": max(
+            (len(sample.prompt_ids) + len(sample.response_ids) for sample in samples),
+            default=0,
+        ),
+        "advantage_groups": advantage_groups,
+        "model_id": local_config.model_id,
+        "model_revision": local_config.model_revision,
+        "attention_implementation": local_config.attention_implementation,
+        "response_only_logits": local_config.response_only_logits,
+        "gradient_checkpointing": local_config.gradient_checkpointing,
+        "gradient_checkpointing_use_reentrant": (local_config.gradient_checkpointing_use_reentrant),
+        "checkpoint_runtime_fields_matched": True,
+        "runtime_config_extensions": runtime_config_extensions,
+        "elapsed_seconds": elapsed,
+        "base_optimizer_step": transaction_input.base_checkpoint.weight_version.optimizer_step,
+        "trained_optimizer_step": committed_checkpoint.weight_version.optimizer_step,
+        "checkpoint_id": str(committed_checkpoint.checkpoint_id),
+        "checkpoint_digest": committed_checkpoint.weight_version.checkpoint_digest,
+        "rollout_revision": commit.rollout_revision.model_dump(mode="json"),
+        "update_metrics": metrics,
+        "checks": {
+            "persisted_training_fields_aligned": all(
+                len(sample.response_ids) == len(sample.old_log_probs) == len(sample.loss_mask)
+                for sample in samples
+            ),
+            "optimizer_step_advanced_once": update_advanced_once,
+            "phase_commit_published": store.load_commit(transaction_id) == commit,
+            "checkpoint_restore": restored == committed_checkpoint.weight_version,
+            "learning_signal": learning_signal,
+        },
+        "recovery_manifest_count": len(manager.recoveries),
+    }
+    await asyncio.to_thread(_write_report, report_path, report)
+    if require_learning_signal and not all(learning_signal.values()):
+        failed = sorted(name for name, passed in learning_signal.items() if not passed)
+        raise RuntimeError(
+            f"WideSeek phase recovery lacked required learning signal: {', '.join(failed)}"
+        )
+    return report
 
 
 class _ComplianceBackend(Protocol):

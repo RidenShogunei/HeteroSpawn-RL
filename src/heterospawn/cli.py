@@ -675,6 +675,46 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=Path("artifacts/wideseek-train-smoke/report.json"),
     )
+    wideseek_recover = subparsers.add_parser(
+        "wideseek-recover-phase",
+        help="recover one crash-safe WideSeek optimizer phase without replaying rollouts",
+    )
+    wideseek_recover.add_argument("--transaction-id", required=True)
+    wideseek_recover.add_argument(
+        "--transaction-dir",
+        type=Path,
+        default=Path("artifacts/wideseek-train-smoke/transactions"),
+    )
+    wideseek_recover.add_argument("--device", default="cuda:0")
+    wideseek_recover.add_argument(
+        "--model-profile",
+        choices=("qwen2.5-0.5b", "qwen3-4b"),
+        default="qwen2.5-0.5b",
+    )
+    wideseek_recover.add_argument("--model-path", type=Path)
+    wideseek_recover.add_argument("--model-manifest", type=Path)
+    wideseek_recover.add_argument(
+        "--allow-model-download",
+        action="store_true",
+        help="required acknowledgement when no verified local model path is supplied",
+    )
+    wideseek_recover.add_argument("--max-sequence-length", type=int, default=4096)
+    wideseek_recover.add_argument("--max-new-tokens", type=int, default=512)
+    wideseek_recover.add_argument(
+        "--require-learning-signal",
+        action="store_true",
+        help="require non-degenerate advantages, finite gradient, and adapter change",
+    )
+    wideseek_recover.add_argument(
+        "--artifact-dir",
+        type=Path,
+        default=Path("artifacts/wideseek-train-smoke/checkpoints"),
+    )
+    wideseek_recover.add_argument(
+        "--report",
+        type=Path,
+        default=Path("artifacts/wideseek-train-smoke/recovery-report.json"),
+    )
     return parser
 
 
@@ -1037,6 +1077,30 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         print(json.dumps(report, ensure_ascii=False, sort_keys=True))
         return 0
+    if args.command == "wideseek-recover-phase":
+        if args.model_path is None and not args.allow_model_download:
+            raise SystemExit("--allow-model-download is required when --model-path is omitted")
+        from heterospawn.training.wideseek_smoke import run_wideseek_phase_recovery
+
+        report = asyncio.run(
+            run_wideseek_phase_recovery(
+                transaction_id=args.transaction_id,
+                transaction_dir=args.transaction_dir,
+                local_config=_local_lora_config(
+                    model_profile=args.model_profile,
+                    device=args.device,
+                    model_path=args.model_path,
+                    model_manifest=args.model_manifest,
+                    artifact_dir=args.artifact_dir,
+                    max_sequence_length=args.max_sequence_length,
+                    max_new_tokens=args.max_new_tokens,
+                ),
+                report_path=args.report,
+                require_learning_signal=args.require_learning_signal,
+            )
+        )
+        print(json.dumps(report, ensure_ascii=False, sort_keys=True))
+        return 0
     return 0
 
 
@@ -1082,6 +1146,8 @@ def _local_lora_config(
             device=device,
             dtype="float16",
             quantization="bnb-4bit",
+            attention_implementation="sdpa",
+            response_only_logits=True,
             gradient_checkpointing=True,
             enable_thinking=False,
             max_sequence_length=max_sequence_length,
