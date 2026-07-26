@@ -4,7 +4,7 @@ import asyncio
 import importlib
 import os
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 
 import pytest
 
@@ -20,6 +20,11 @@ from heterospawn.errors import (
 from heterospawn.policies.base import Message
 from heterospawn.policies.trainable import ToolDefinition
 from heterospawn.training import TrainingBatchBuilder
+from heterospawn.training.wideseek_sft import (
+    SupervisedConversation,
+    build_supervised_training_batch,
+    materialize_supervised_conversations,
+)
 
 if os.environ.get("HETEROSPAWN_RUN_LOCAL_BACKEND_TESTS") != "1":
     pytest.skip(
@@ -44,7 +49,14 @@ class TinyTokenizer:
     chat_template = "tiny-contract-template-v1"
 
     def get_vocab(self) -> dict[str, int]:
-        return {"<pad>": 0, "<bos>": 1, "<eos>": 2, "tiny": 5, "prompt": 6}
+        return {
+            "<pad>": 0,
+            "<bos>": 1,
+            "<eos>": 2,
+            "tiny": 5,
+            "prompt": 6,
+            "target": 7,
+        }
 
     def apply_chat_template(
         self,
@@ -54,10 +66,15 @@ class TinyTokenizer:
         add_generation_prompt: bool,
         tools: list[dict[str, object]] | None = None,
     ) -> list[int]:
-        assert tokenize and add_generation_prompt and messages
+        assert tokenize and messages
         if tools is not None:
             assert tools
-        return [1, 5, 6]
+        if add_generation_prompt:
+            return [1, 5, 6]
+        target = messages[-1]
+        assert target["role"] == "assistant"
+        target_ids = [10 + (byte % 50) for byte in target["content"].encode()]
+        return [1, 5, 6, *target_ids, 2]
 
 
 def _backend(
@@ -170,6 +187,28 @@ def _request(
     )
 
 
+def _supervised_conversation(
+    role: Literal["main", "sub"],
+    behavior: Literal["main_final", "sub_summary"],
+    target: str,
+) -> SupervisedConversation:
+    return SupervisedConversation(
+        example_id=f"sft-{behavior}",
+        task_id=TaskId("sft-task"),
+        agent_role=role,
+        behavior=behavior,
+        dataset_revision="fixture-dataset",
+        source_digest="a" * 64,
+        constructor_revision="b" * 64,
+        messages=(
+            Message(role="system", content="fixture system"),
+            Message(role="user", content="fixture evidence"),
+        ),
+        tools=(),
+        target=target,
+    )
+
+
 def _step(
     request: GenerationRequest,
     result: Any,
@@ -233,6 +272,92 @@ async def test_exact_generate_update_sync_and_partner_isolation(tmp_path: Path) 
     assert backend.adapter_hash(main, rollout=True) == backend.adapter_hash(main)
     with pytest.raises(RolloutRevisionMismatch):
         await backend.endpoint(main).generate(request, main_revision)
+
+
+@pytest.mark.asyncio
+async def test_supervised_update_is_role_balanced_idempotent_and_restorable(
+    tmp_path: Path,
+) -> None:
+    backend = _backend(tmp_path / "original")
+    main = PolicyId("main")
+    sub = PolicyId("sub")
+    main_revision = backend.rollout_revision(main)
+    main_train_before = backend.adapter_hash(main)
+    main_rollout_before = backend.adapter_hash(main, rollout=True)
+    sub_train_before = backend.adapter_hash(sub)
+    sub_rollout_before = backend.adapter_hash(sub, rollout=True)
+    conversations = (
+        _supervised_conversation("main", "main_final", "answer"),
+        _supervised_conversation("sub", "sub_summary", "evidence"),
+    )
+    examples = materialize_supervised_conversations(
+        conversations,
+        backend.prompt_encoder,
+    )
+    batch = build_supervised_training_batch(
+        batch_id="shared-sft-update-1",
+        target_policy_id=main,
+        expected_base_version=main_revision.weight_version,
+        examples=examples,
+    )
+
+    update = await backend.update_supervised(
+        main,
+        batch,
+        main_revision.weight_version,
+    )
+
+    metrics = dict(update.metrics)
+    assert update.trained_version.optimizer_step == 1
+    assert backend.adapter_hash(main) != main_train_before
+    assert backend.adapter_hash(main, rollout=True) == main_rollout_before
+    assert backend.adapter_hash(sub) == sub_train_before
+    assert backend.adapter_hash(sub, rollout=True) == sub_rollout_before
+    assert metrics["gradient_norm"] > 0
+    assert metrics["loss"] == pytest.approx(
+        (metrics["main_final_token_loss"] + metrics["sub_summary_token_loss"]) / 2
+    )
+
+    replay = await backend.update_supervised(
+        main,
+        batch,
+        main_revision.weight_version,
+    )
+    assert replay == update
+    assert backend.weight_version(main).optimizer_step == 1
+
+    conflicting_examples = materialize_supervised_conversations(
+        (
+            _supervised_conversation("main", "main_final", "different answer"),
+            conversations[1],
+        ),
+        backend.prompt_encoder,
+    )
+    conflicting_batch = build_supervised_training_batch(
+        batch_id=batch.batch_id,
+        target_policy_id=main,
+        expected_base_version=main_revision.weight_version,
+        examples=conflicting_examples,
+    )
+    with pytest.raises(TrainingBatchError, match="another digest"):
+        await backend.update_supervised(
+            main,
+            conflicting_batch,
+            main_revision.weight_version,
+        )
+
+    synced = await backend.sync_rollout_weights(main, update.trained_version)
+    assert synced.replica_set_revision == main_revision.replica_set_revision + 1
+    assert backend.adapter_hash(main, rollout=True) == backend.adapter_hash(main)
+
+    replacement = _backend(tmp_path / "replacement")
+    restored = await replacement.restore_checkpoint(update.checkpoint)
+    recovered = await replacement.sync_rollout_weights(main, restored)
+    assert restored == update.trained_version
+    assert recovered.weight_version == synced.weight_version
+    assert recovered.deployment_id != synced.deployment_id
+    assert replacement.adapter_hash(main) == backend.adapter_hash(main)
+    assert replacement.adapter_hash(main, rollout=True) == replacement.adapter_hash(main)
 
 
 @pytest.mark.asyncio

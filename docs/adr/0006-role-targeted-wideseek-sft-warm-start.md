@@ -42,6 +42,9 @@ attribution of later HeteroSpawn improvements.
 - Use a separate `SupervisedTrainingBatch` contract and a causal SFT objective whose mask is zero
   over prompt tokens and one over assistant target tokens. Do not manufacture rollout revisions,
   old log-probabilities, rewards, or advantages for SFT data.
+- Aggregate the SFT loss by active target token within each behavior, then average the active
+  behaviors. A shared Main/Sub batch therefore gives `main_final` and `sub_summary` equal loss
+  mass; a role-filtered independent-policy batch reduces to that role's target-token mean.
 - A supervised optimizer update must still create a new immutable `WeightVersion`; rollout
   services see it only after explicit synchronization creates a new `RolloutRevision`.
   Checkpoint, idempotency, restore, and phase-transaction rules remain unchanged.

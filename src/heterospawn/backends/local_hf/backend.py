@@ -20,6 +20,7 @@ from urllib.request import url2pathname
 from heterospawn.assets import AssetPreparer, load_asset_manifest
 from heterospawn.backends.local_hf.config import LocalLoraConfig, LocalPromptEncoder
 from heterospawn.domain.ids import CheckpointId, EpisodeId, PolicyId
+from heterospawn.domain.supervised import SupervisedTrainingBatch
 from heterospawn.domain.training import (
     CheckpointRef,
     GenerationRequest,
@@ -368,6 +369,136 @@ class LocalHfLoraBackend:
                     ("entropy_mean", sum(entropies) / len(entropies)),
                     ("episode_count", float(episode_count)),
                 ),
+            )
+            self._updates[batch.batch_id] = (batch.batch_digest, result)
+            return result
+
+    async def update_supervised(
+        self,
+        policy_id: PolicyId,
+        batch: SupervisedTrainingBatch,
+        expected_base_version: WeightVersion,
+    ) -> UpdateResult:
+        """Apply a role-balanced target-only causal SFT update."""
+
+        async with self._lock:
+            prior = self._updates.get(batch.batch_id)
+            if prior is not None:
+                prior_digest, result = prior
+                if prior_digest != batch.batch_digest:
+                    raise TrainingBatchError("batch_id was already used with another digest")
+                return result
+            state = self._state(policy_id)
+            if batch.target_policy_id != policy_id:
+                raise TrainingBatchError("batch targets another policy")
+            if batch.expected_base_version != expected_base_version:
+                raise WeightVersionMismatch("call and batch base versions differ")
+            if state.weight != expected_base_version:
+                raise WeightVersionMismatch("local train adapter is not at expected base version")
+            for example in batch.examples:
+                if example.encoding.tokenizer_revision != self.prompt_encoder.tokenizer_revision:
+                    raise TrainingBatchError("supervised tokenizer revision mismatch")
+                if not self.prompt_encoder.accepts_prompt_template_revision(
+                    example.encoding.prompt_template_revision
+                ):
+                    raise TrainingBatchError("supervised prompt-template revision mismatch")
+                if (
+                    len(example.encoding.prompt_ids) + len(example.encoding.target_ids)
+                    > self.config.max_sequence_length
+                ):
+                    raise TrainingBatchError("supervised example exceeds local max_sequence_length")
+
+            self._model.set_adapter(state.train_adapter)
+            self._model.train()
+            if self.config.gradient_checkpointing:
+                self._model.config.use_cache = False
+            state.optimizer.zero_grad(set_to_none=True)
+
+            role_token_counts: dict[str, int] = {}
+            for example in batch.examples:
+                active_tokens = sum(example.loss_mask[len(example.encoding.prompt_ids) :])
+                role_token_counts[example.behavior] = (
+                    role_token_counts.get(example.behavior, 0) + active_tokens
+                )
+            role_count = len(role_token_counts)
+            if role_count < 1 or any(count < 1 for count in role_token_counts.values()):
+                raise TrainingBatchError("supervised batch has no active target tokens")
+
+            loss_value = 0.0
+            role_negative_log_sums = dict.fromkeys(role_token_counts, 0.0)
+            entropy_sum = 0.0
+            for example in batch.examples:
+                target_log_probs, entropy = self._sample_log_probs(
+                    example.encoding.prompt_ids,
+                    example.encoding.target_ids,
+                )
+                target_mask = self._torch.tensor(
+                    example.loss_mask[len(example.encoding.prompt_ids) :],
+                    dtype=target_log_probs.dtype,
+                    device=self.config.device,
+                )
+                negative_log_sum = -(target_log_probs * target_mask).sum()
+                scaled_loss = negative_log_sum / (role_token_counts[example.behavior] * role_count)
+                if not bool(self._torch.isfinite(scaled_loss).item()):
+                    state.optimizer.zero_grad(set_to_none=True)
+                    raise TrainingBatchError("supervised loss is not finite")
+                scaled_loss.backward()
+                detached_negative_log_sum = float(negative_log_sum.detach().cpu())
+                role_negative_log_sums[example.behavior] += detached_negative_log_sum
+                loss_value += float(scaled_loss.detach().cpu())
+                entropy_sum += float(entropy.detach().cpu())
+
+            grad_norm = self._gradient_norm(state.train_adapter)
+            if not self._adapter_gradients_are_finite(state.train_adapter):
+                state.optimizer.zero_grad(set_to_none=True)
+                raise TrainingBatchError("supervised gradients are not finite")
+            adapter_before = self._adapter_state(state.train_adapter)
+            optimizer_before = copy.deepcopy(state.optimizer.state_dict())
+            state.optimizer.step()
+            if not self._adapter_is_finite(state.train_adapter):
+                self._peft.set_peft_model_state_dict(
+                    self._model,
+                    adapter_before,
+                    adapter_name=state.train_adapter,
+                )
+                state.optimizer.load_state_dict(optimizer_before)
+                state.optimizer.zero_grad(set_to_none=True)
+                raise TrainingBatchError("optimizer produced non-finite adapter weights")
+
+            base_version = state.weight
+            checkpoint = self._save_checkpoint(
+                policy_id,
+                base_version.optimizer_step + 1,
+            )
+            state.weight = checkpoint.weight_version
+            state.checkpoint = checkpoint
+            metrics: list[tuple[str, float]] = [
+                ("loss", loss_value),
+                ("gradient_norm", grad_norm),
+                ("example_count", float(len(batch.examples))),
+                ("target_token_count", float(sum(role_token_counts.values()))),
+                ("active_role_count", float(role_count)),
+                ("entropy_mean", entropy_sum / len(batch.examples)),
+            ]
+            for behavior in sorted(role_token_counts):
+                metrics.append(
+                    (
+                        f"{behavior}_token_loss",
+                        role_negative_log_sums[behavior] / role_token_counts[behavior],
+                    )
+                )
+                metrics.append(
+                    (
+                        f"{behavior}_target_tokens",
+                        float(role_token_counts[behavior]),
+                    )
+                )
+            result = UpdateResult(
+                policy_id=policy_id,
+                base_version=base_version,
+                trained_version=state.weight,
+                checkpoint=checkpoint,
+                metrics=tuple(metrics),
             )
             self._updates[batch.batch_id] = (batch.batch_digest, result)
             return result
