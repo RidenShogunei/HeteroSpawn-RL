@@ -26,6 +26,7 @@ from heterospawn.training.wideseek_sft import (
 from heterospawn.training.wideseek_sft_smoke import (
     _materialize_task_groups,
     _planned_task_batches,
+    _readiness_gate,
     _validate_compliance_selection,
 )
 
@@ -308,3 +309,27 @@ def test_automatic_sft_selection_excludes_compliance_indices(tmp_path: Path) -> 
 
     assert tuple(group.task_index for group in groups) == (1,)
     assert skipped == ()
+
+
+def test_sft_readiness_gate_requires_spawn_retention() -> None:
+    gate = _readiness_gate(
+        {
+            "episodes": 16,
+            "format_ok_rate": 10 / 16,
+            "nonzero_outcome_rate": 4 / 16,
+            "spawn_rate": 6 / 16,
+        },
+        {
+            "exact_token_logprob_alignment": True,
+            "stable_event_order": True,
+        },
+    )
+
+    assert gate["observed"] == {
+        "episodes": 16,
+        "format_ok": 10,
+        "nonzero_outcome": 4,
+        "legal_spawn": 6,
+        "contract_checks_passed": True,
+    }
+    assert gate["passed"] is False

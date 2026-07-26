@@ -170,3 +170,15 @@ This file records milestone-level events. Fine-grained work remains in GitHub is
   format-valid and one non-zero-outcome answer after one shared-policy optimizer step. The
   ADR-0006 readiness gate therefore remains closed; the next experiment is a bounded multi-step
   SFT strength/coverage diagnosis, not direct-RL scaling.
+- Corrected the one-step validation record: its 2,304-token backend limit also affected the
+  compliance rollout, so that diagnostic was not a strict comparison with the 4,096-token
+  baseline. Multi-step SFT now separates the training-only resource cap from rollout context.
+- Added a deterministic held-out-disjoint multi-step SFT scheduler with whole-task batching,
+  chained immutable versions, per-step metrics, and explicit training/rollout length identities.
+- Completed a real 192-task, 540-example, 48-step Qwen3-4B run on RTX 2080 Ti. All exact-token,
+  checkpoint, sync, stale-revision, and replacement-restore checks passed at 8.21 GB peak
+  allocated VRAM.
+- The unchanged 4,096-token compliance profile improved from 1 to 10 format-valid answers and
+  from 1 to 4 non-zero outcomes, but legal spawn fell from 16 to 6 episodes. The final checkpoint
+  fails the spawn-retention gate; intermediate-checkpoint evaluation is selected before any
+  additional SFT exposure or direct-RL scaling.

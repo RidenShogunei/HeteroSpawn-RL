@@ -269,6 +269,10 @@ async def run_wideseek_sft_smoke(
             "selection_profile": compliance_result["selection_profile"],
             "summary": compliance_result["summary"],
             "checks": compliance_result["checks"],
+            "readiness_gate": _readiness_gate(
+                compliance_result["summary"],
+                compliance_result["checks"],
+            ),
             "report_digest": _file_sha256(compliance_report_path),
         }
 
@@ -327,6 +331,9 @@ async def run_wideseek_sft_smoke(
         "step_records": step_records,
         "checks": checks,
         "post_sft_compliance": compliance,
+        "direct_rl_ready": (
+            None if compliance is None else bool(compliance["readiness_gate"]["passed"])
+        ),
         "report_excludes": [
             "questions",
             "reference_answers",
@@ -420,6 +427,35 @@ def _planned_task_batches(
                 )
             )
     return tuple(result)
+
+
+def _readiness_gate(
+    summary: dict[str, Any],
+    checks: dict[str, bool],
+) -> dict[str, Any]:
+    episodes = int(summary["episodes"])
+    format_ok = round(float(summary["format_ok_rate"]) * episodes)
+    nonzero_outcome = round(float(summary["nonzero_outcome_rate"]) * episodes)
+    legal_spawn = round(float(summary["spawn_rate"]) * episodes)
+    contract_checks_passed = all(checks.values())
+    passed = (
+        contract_checks_passed and format_ok >= 4 and nonzero_outcome >= 2 and legal_spawn >= 12
+    )
+    return {
+        "passed": passed,
+        "thresholds": {
+            "format_ok": 4,
+            "nonzero_outcome": 2,
+            "legal_spawn": 12,
+        },
+        "observed": {
+            "episodes": episodes,
+            "format_ok": format_ok,
+            "nonzero_outcome": nonzero_outcome,
+            "legal_spawn": legal_spawn,
+            "contract_checks_passed": contract_checks_passed,
+        },
+    }
 
 
 async def _stale_revision_rejected(
