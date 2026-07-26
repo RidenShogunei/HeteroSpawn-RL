@@ -114,6 +114,11 @@ The opt-in `wideseek-sft-smoke` command uses the isolated LocalHF QLoRA environm
 shared-policy supervised update, checkpoint, sync, stale-revision rejection, and replacement
 restore. It is a contract smoke, not a benchmark or a completed warm-start experiment.
 
+After that contract passes, `wideseek-sft-train` runs a deterministic held-out-disjoint multi-step
+warm start. Its training-only sequence cap can remain at 2,304 tokens on an RTX 2080 Ti while the
+post-SFT rollout context stays at the fixed 4,096-token baseline. See the warm-start runbook for
+the pinned 192-task/4-tasks-per-step profile and reporting rules.
+
 The complete offline environment additionally uses the pinned 156 GB Wiki-2018/Qdrant corpus and
 E5-base-v2. Its Linux launcher verifies every source file, starts a mutable Qdrant deployment and
 the pinned upstream retrieval server, then runs:

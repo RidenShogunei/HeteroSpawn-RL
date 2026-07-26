@@ -51,6 +51,11 @@ attribution of later HeteroSpawn improvements.
 - The first real run uses the shared Qwen3-4B QLoRA policy. Independent-policy experiments may
   later initialize both policies from the same audited warm-start checkpoint or use separately
   declared role-filtered batches; they may not silently change topology.
+- Multi-step runs partition whole tasks into deterministic task batches. Every optimizer batch
+  retains both behaviors, chains its expected `WeightVersion` from the preceding immutable
+  checkpoint, and synchronizes rollout weights only after the declared schedule completes.
+- The resource-safe supervised-example length cap is separate from the backend rollout context
+  limit. Filtering a long SFT task must not lower the unchanged 4,096-token compliance context.
 - Do not use the released `RLinf/WideSeek-R1-4b` as a teacher in the default experiment. Any later
   teacher-distillation study requires a separate ADR and must label the attribution change.
 
@@ -74,6 +79,9 @@ attribution of later HeteroSpawn improvements.
   tokenization, target-only masks, and digest rejection.
 - A real RTX 2080 Ti Qwen3-4B run must verify a non-zero LoRA update, immutable checkpoint,
   explicit sync, stale-revision rejection, and restore before the warm-start checkpoint is used.
+- A multi-step run must report the deterministic schedule digest, selected and resource-filtered
+  task indices, per-step role metrics, chained optimizer steps, training-only sequence cap, and
+  unchanged rollout context limit.
 - Rerun the exact fixed 16-task profile with no optimizer update during evaluation. The minimum
   engineering gate is:
   - all exact trajectory/event/revision checks pass;

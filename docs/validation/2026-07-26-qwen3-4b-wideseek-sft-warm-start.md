@@ -7,6 +7,13 @@
 - Officially comparable: No
 - Source commit used by the runner: `807ab4ff91309b77c0269d45e3ff8ea935f2e713`
 
+> Correction recorded 2026-07-26: the completed run used a backend
+> `max_sequence_length` of 2,304 to avoid the failed long SFT sample. The compliance rollout
+> therefore inherited 2,304 rather than the baseline's 4,096-token context. The SFT
+> update/checkpoint/sync/restore result remains valid, but the post-SFT behavior numbers below are
+> diagnostic only and are not a strict same-configuration comparison. A subsequent multi-step
+> runner separates the training-only cap from the unchanged rollout limit.
+
 ## Scope
 
 This run applied exactly one shared-policy QLoRA optimizer step to the role-targeted examples
@@ -44,8 +51,8 @@ captured output did not include a CUDA exception, so this is recorded as an inco
 resource-bound attempt rather than a successful or failed model-quality run.
 
 The completed run excluded that one training index and retained the other seven disjoint tasks.
-Its longest sequence was 2,101 tokens. This changed only the SFT construction selection; the
-post-SFT compliance profile and its 4,096/512-token rollout limits were unchanged.
+Its longest sequence was 2,101 tokens. The backend context was also reduced to 2,304; this
+unintentionally changed the compliance context and is corrected in the note above.
 
 ## SFT results
 
@@ -75,7 +82,8 @@ PyTorch-allocated bytes on one RTX 2080 Ti.
 ## Fixed post-SFT compliance results
 
 The evaluator used the same fixed profile, seed, raw-policy sampling, and Search/Access display
-budgets as the pre-SFT baseline. It performed no optimizer update and made no Judge request.
+budgets as the pre-SFT baseline, but inherited the reduced 2,304-token backend context. It
+performed no optimizer update and made no Judge request.
 
 | Metric | Pre-SFT baseline | Post-SFT |
 |---|---:|---:|
@@ -91,14 +99,16 @@ unchanged adapter hashes all passed. The compliance run took 535.003 seconds and
 
 The ADR-0006 minimums require at least four format-valid answers and two non-zero outcomes.
 Those two thresholds were not met. Legal spawn retention and all rollout-contract checks did
-pass.
+pass, but the context mismatch means this run cannot close the formal gate.
 
 ## Decision
 
 The implementation is ready to perform real supervised updates, immutable checkpointing,
 explicit rollout synchronization, replacement-process recovery, and held-out Search/Access
-evaluation on RTX 2080 Ti hardware. The single small optimizer step did not measurably improve
-the declared behavior gate, so its checkpoint must not be treated as an RL-ready initialization.
+evaluation on RTX 2080 Ti hardware. The single small optimizer step did not show a diagnostic
+improvement. Because the compliance context differed from the baseline, its checkpoint must not
+be treated as an RL-ready initialization and the formal behavior gate remains unevaluated for
+this checkpoint.
 
 The next experiment should diagnose SFT strength and construction coverage while preserving the
 same held-out gate. In particular, it should use a bounded multi-step or multi-epoch schedule,

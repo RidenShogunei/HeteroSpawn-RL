@@ -106,3 +106,20 @@ def test_wideseek_sft_smoke_defaults_to_qwen3_shared_update() -> None:
     assert args.max_new_tokens == 512
     assert args.max_workers == 4
     assert args.run_compliance is False
+
+
+def test_wideseek_multistep_sft_separates_training_and_rollout_limits() -> None:
+    args = build_parser().parse_args(
+        [
+            "wideseek-sft-train",
+            "--model-path",
+            "model",
+        ]
+    )
+
+    assert args.model_profile == "qwen3-4b"
+    assert args.task_limit == 192
+    assert args.tasks_per_step == 4
+    assert args.epochs == 1
+    assert args.training_max_sequence_length == 2304
+    assert args.max_sequence_length == 4096

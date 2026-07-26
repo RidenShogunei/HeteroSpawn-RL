@@ -328,6 +328,99 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=Path("artifacts/wideseek-sft-smoke/report.json"),
     )
+    wideseek_sft_train = subparsers.add_parser(
+        "wideseek-sft-train",
+        help="run a bounded multi-step Qwen3 WideSeek SFT warm start",
+    )
+    wideseek_sft_train.add_argument(
+        "--split",
+        choices=("width_20k", "depth_20k", "hybrid_20k"),
+        default="hybrid_20k",
+    )
+    wideseek_sft_train.add_argument(
+        "--task-index",
+        action="append",
+        type=int,
+        dest="task_indices",
+        help="explicit zero-based training task index; repeat to override --task-limit",
+    )
+    wideseek_sft_train.add_argument(
+        "--task-limit",
+        type=int,
+        default=192,
+        help="number of eligible held-out-disjoint tasks to select",
+    )
+    wideseek_sft_train.add_argument("--tasks-per-step", type=int, default=4)
+    wideseek_sft_train.add_argument("--epochs", type=int, default=1)
+    wideseek_sft_train.add_argument(
+        "--training-max-sequence-length",
+        type=int,
+        default=2304,
+        help="resource-safe SFT sample cap; does not lower the rollout context limit",
+    )
+    wideseek_sft_train.add_argument(
+        "--data-manifest",
+        type=Path,
+        default=Path("manifests/wideseek-train-data.json"),
+    )
+    wideseek_sft_train.add_argument(
+        "--data-dir",
+        type=Path,
+        default=Path("artifacts/wideseek-assets/train-data"),
+    )
+    wideseek_sft_train.add_argument("--device", default="cuda:0")
+    wideseek_sft_train.add_argument(
+        "--model-profile",
+        choices=("qwen2.5-0.5b", "qwen3-4b"),
+        default="qwen3-4b",
+    )
+    wideseek_sft_train.add_argument("--model-path", type=Path)
+    wideseek_sft_train.add_argument(
+        "--model-manifest",
+        type=Path,
+        help="trusted multi-file model manifest; required by the qwen3-4b profile",
+    )
+    wideseek_sft_train.add_argument(
+        "--allow-model-download",
+        action="store_true",
+        help="required acknowledgement when no verified local model path is supplied",
+    )
+    wideseek_sft_train.add_argument(
+        "--max-sequence-length",
+        type=int,
+        default=4096,
+        help="rollout/evaluation context limit",
+    )
+    wideseek_sft_train.add_argument("--max-new-tokens", type=int, default=512)
+    wideseek_sft_train.add_argument("--max-workers", type=int, default=4)
+    wideseek_sft_train.add_argument(
+        "--run-compliance",
+        action="store_true",
+        help="run the fixed held-out 16-task profile after replacement restore",
+    )
+    wideseek_sft_train.add_argument(
+        "--service-url",
+        default="http://127.0.0.1:8000",
+    )
+    wideseek_sft_train.add_argument(
+        "--qdrant-url",
+        default="http://127.0.0.1:6333",
+    )
+    wideseek_sft_train.add_argument(
+        "--compliance-report",
+        type=Path,
+        default=Path("artifacts/wideseek-sft-train/compliance.json"),
+    )
+    wideseek_sft_train.add_argument(
+        "--artifact-dir",
+        type=Path,
+        default=Path("artifacts/wideseek-sft-train/checkpoints"),
+    )
+    wideseek_sft_train.add_argument(
+        "--report",
+        type=Path,
+        default=Path("artifacts/wideseek-sft-train/report.json"),
+    )
     environment_check = subparsers.add_parser(
         "wideseek-check-environment",
         help="verify pinned corpus/retriever assets and probe the offline Search/Access service",
@@ -719,6 +812,52 @@ def main(argv: Sequence[str] | None = None) -> int:
             run_wideseek_sft_smoke(
                 split=args.split,
                 task_indices=tuple(args.task_indices or (0,)),
+                data_manifest_path=args.data_manifest,
+                data_dir=args.data_dir,
+                local_config=_local_lora_config(
+                    model_profile=args.model_profile,
+                    device=args.device,
+                    model_path=args.model_path,
+                    model_manifest=args.model_manifest,
+                    artifact_dir=args.artifact_dir,
+                    max_sequence_length=args.max_sequence_length,
+                    max_new_tokens=args.max_new_tokens,
+                ),
+                report_path=args.report,
+                max_workers=args.max_workers,
+                compliance_report_path=(args.compliance_report if args.run_compliance else None),
+                service_url=args.service_url,
+                qdrant_url=args.qdrant_url,
+            )
+        )
+        print(json.dumps(report, ensure_ascii=False, sort_keys=True))
+        return 0
+    if args.command == "wideseek-sft-train":
+        if args.model_path is None and not args.allow_model_download:
+            raise SystemExit("--allow-model-download is required when --model-path is omitted")
+        if not 1 <= args.max_workers <= 4:
+            raise SystemExit("--max-workers must be in 1..4")
+        if args.task_limit < 1:
+            raise SystemExit("--task-limit must be positive")
+        if args.tasks_per_step < 1:
+            raise SystemExit("--tasks-per-step must be positive")
+        if args.epochs < 1:
+            raise SystemExit("--epochs must be positive")
+        if not 16 <= args.training_max_sequence_length <= args.max_sequence_length:
+            raise SystemExit("--training-max-sequence-length must be in 16..--max-sequence-length")
+        from heterospawn.training.wideseek_sft_smoke import (
+            run_wideseek_sft_smoke,
+        )
+
+        report = asyncio.run(
+            run_wideseek_sft_smoke(
+                split=args.split,
+                task_indices=tuple(args.task_indices or ()),
+                task_limit=args.task_limit,
+                tasks_per_step=args.tasks_per_step,
+                epochs=args.epochs,
+                training_max_sequence_length=args.training_max_sequence_length,
+                exclude_compliance_selection=True,
                 data_manifest_path=args.data_manifest,
                 data_dir=args.data_dir,
                 local_config=_local_lora_config(

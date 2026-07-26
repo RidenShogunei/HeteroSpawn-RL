@@ -9,6 +9,7 @@ import importlib
 import importlib.metadata
 import json
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +17,7 @@ from heterospawn.assets import load_asset_manifest
 from heterospawn.backends.local_hf import LocalHfLoraBackend, LocalLoraConfig
 from heterospawn.benchmarks.wideseek import WideSeekSplit, load_wideseek_dataset
 from heterospawn.domain.ids import AgentInstanceId, EpisodeId, PolicyId, RolloutId
+from heterospawn.domain.supervised import SupervisedTrainingExample
 from heterospawn.domain.training import GenerationRequest, canonical_digest
 from heterospawn.errors import ConfigurationError, RolloutRevisionMismatch
 from heterospawn.training.wideseek_sft import (
@@ -23,6 +25,12 @@ from heterospawn.training.wideseek_sft import (
     build_supervised_training_batch,
     materialize_supervised_conversations,
 )
+
+
+@dataclass(frozen=True)
+class _TaskExamples:
+    task_index: int
+    examples: tuple[SupervisedTrainingExample, ...]
 
 
 async def run_wideseek_sft_smoke(
@@ -37,12 +45,31 @@ async def run_wideseek_sft_smoke(
     compliance_report_path: Path | None = None,
     service_url: str = "http://127.0.0.1:8000",
     qdrant_url: str = "http://127.0.0.1:6333",
+    task_limit: int = 1,
+    tasks_per_step: int | None = None,
+    epochs: int = 1,
+    training_max_sequence_length: int | None = None,
+    exclude_compliance_selection: bool = False,
 ) -> dict[str, Any]:
-    """Run one shared-policy SFT update without persisting plaintext examples."""
+    """Run a bounded shared-policy SFT schedule without persisting plaintext examples."""
 
-    if not task_indices or len(set(task_indices)) != len(task_indices):
-        raise ValueError("SFT smoke task indices must be non-empty and unique")
-    if compliance_report_path is not None:
+    if task_indices and len(set(task_indices)) != len(task_indices):
+        raise ValueError("SFT task indices must be unique")
+    if not task_indices and task_limit < 1:
+        raise ValueError("SFT task_limit must be positive")
+    if tasks_per_step is not None and tasks_per_step < 1:
+        raise ValueError("SFT tasks_per_step must be positive")
+    if epochs < 1:
+        raise ValueError("SFT epochs must be positive")
+    training_sequence_limit = (
+        local_config.max_sequence_length
+        if training_max_sequence_length is None
+        else training_max_sequence_length
+    )
+    if not 16 <= training_sequence_limit <= local_config.max_sequence_length:
+        raise ValueError("training_max_sequence_length must be in 16..backend max_sequence_length")
+    heldout_isolation = exclude_compliance_selection or compliance_report_path is not None
+    if heldout_isolation and task_indices:
         _validate_compliance_selection(split, task_indices)
     torch = importlib.import_module("torch")
     if not str(local_config.device).startswith("cuda") or not torch.cuda.is_available():
@@ -62,10 +89,6 @@ async def run_wideseek_sft_smoke(
         expected_sha256=expected.sha256,
         revision=manifest.revision,
     )
-    construction = WideSeekRoleSftConstructor(max_workers=max_workers).build(
-        dataset,
-        task_indices=task_indices,
-    )
 
     device_index = torch.device(local_config.device).index or 0
     with torch.cuda.device(local_config.device):
@@ -80,49 +103,84 @@ async def run_wideseek_sft_smoke(
     base_revision = backend.rollout_revision(policy_id)
     train_hash_before = backend.adapter_hash(policy_id)
     rollout_hash_before = backend.adapter_hash(policy_id, rollout=True)
-    examples = materialize_supervised_conversations(
-        construction.conversations,
-        backend.prompt_encoder,
+    task_groups, skipped_overlength = _materialize_task_groups(
+        dataset=dataset,
+        explicit_task_indices=task_indices,
+        task_limit=task_limit,
+        constructor=WideSeekRoleSftConstructor(max_workers=max_workers),
+        codec=backend.prompt_encoder,
+        training_max_sequence_length=training_sequence_limit,
+        exclude_compliance=heldout_isolation,
     )
-    del construction
-    too_long = tuple(
-        example.example_id
-        for example in examples
-        if (
-            len(example.encoding.prompt_ids) + len(example.encoding.target_ids)
-            > local_config.max_sequence_length
+    selected_task_indices = tuple(group.task_index for group in task_groups)
+    examples = tuple(example for group in task_groups for example in group.examples)
+    effective_tasks_per_step = tasks_per_step or len(task_groups)
+    schedule = _planned_task_batches(
+        selected_task_indices,
+        tasks_per_step=effective_tasks_per_step,
+        epochs=epochs,
+        seed=local_config.seed,
+    )
+    schedule_digest = canonical_digest(
+        {
+            "split": split,
+            "task_indices": selected_task_indices,
+            "dataset_revision": dataset.revision,
+            "source_digest": dataset.source_digest,
+            "constructor_revision": examples[0].constructor_revision,
+            "tasks_per_step": effective_tasks_per_step,
+            "epochs": epochs,
+            "training_max_sequence_length": training_sequence_limit,
+            "seed": local_config.seed,
+        }
+    )
+    groups_by_index = {group.task_index: group for group in task_groups}
+    current_version = base_revision.weight_version
+    step_records: list[dict[str, Any]] = []
+    update: Any = None
+    last_batch: Any = None
+    last_base_version: Any = None
+    for epoch_index, step_in_epoch, batch_indices in schedule:
+        batch_examples = tuple(
+            example
+            for task_index in batch_indices
+            for example in groups_by_index[task_index].examples
         )
-    )
-    if too_long:
-        raise ValueError(f"{len(too_long)} supervised examples exceed max_sequence_length")
-    batch = build_supervised_training_batch(
-        batch_id=(
-            "wideseek-sft:"
-            + canonical_digest(
-                {
-                    "split": split,
-                    "task_indices": task_indices,
-                    "dataset_revision": dataset.revision,
-                    "source_digest": dataset.source_digest,
-                    "constructor_revision": examples[0].constructor_revision,
-                }
-            )
-        ),
-        target_policy_id=policy_id,
-        expected_base_version=base_revision.weight_version,
-        examples=examples,
-    )
-    update = await backend.update_supervised(
-        policy_id,
-        batch,
-        base_revision.weight_version,
-    )
+        batch = build_supervised_training_batch(
+            batch_id=(f"wideseek-sft:{schedule_digest}:epoch-{epoch_index}:step-{step_in_epoch}"),
+            target_policy_id=policy_id,
+            expected_base_version=current_version,
+            examples=batch_examples,
+        )
+        last_base_version = current_version
+        update = await backend.update_supervised(
+            policy_id,
+            batch,
+            current_version,
+        )
+        current_version = update.trained_version
+        last_batch = batch
+        step_records.append(
+            {
+                "epoch": epoch_index,
+                "step_in_epoch": step_in_epoch,
+                "optimizer_step": current_version.optimizer_step,
+                "task_count": len(batch_indices),
+                "example_count": len(batch_examples),
+                "target_token_count": sum(
+                    len(example.encoding.target_ids) for example in batch_examples
+                ),
+                "metrics": dict(update.metrics),
+            }
+        )
+    if update is None or last_batch is None or last_base_version is None:
+        raise RuntimeError("SFT schedule produced no optimizer updates")
     train_hash_after = backend.adapter_hash(policy_id)
     rollout_hash_before_sync = backend.adapter_hash(policy_id, rollout=True)
     replay = await backend.update_supervised(
         policy_id,
-        batch,
-        base_revision.weight_version,
+        last_batch,
+        last_base_version,
     )
     synced_revision = await backend.sync_rollout_weights(
         policy_id,
@@ -170,7 +228,9 @@ async def run_wideseek_sft_smoke(
         "rollout_unchanged_before_sync": rollout_hash_before_sync == rollout_hash_before,
         "idempotent_replay": replay == update
         and replay.trained_version.optimizer_step
-        == base_revision.weight_version.optimizer_step + 1,
+        == base_revision.weight_version.optimizer_step + len(schedule),
+        "optimizer_steps_match_schedule": update.trained_version.optimizer_step
+        == base_revision.weight_version.optimizer_step + len(schedule),
         "sync_matches_train": rollout_hash_after_sync == train_hash_after,
         "stale_revision_rejected": stale_rejected,
         "checkpoint_restored": restored_version == update.trained_version
@@ -209,20 +269,33 @@ async def run_wideseek_sft_smoke(
             "selection_profile": compliance_result["selection_profile"],
             "summary": compliance_result["summary"],
             "checks": compliance_result["checks"],
+            "readiness_gate": _readiness_gate(
+                compliance_result["summary"],
+                compliance_result["checks"],
+            ),
             "report_digest": _file_sha256(compliance_report_path),
         }
 
     report: dict[str, Any] = {
-        "schema_revision": "heterospawn-wideseek-sft-smoke-v1",
+        "schema_revision": "heterospawn-wideseek-sft-smoke-v2",
         "status": "passed",
         "comparable_to_official": False,
-        "training_scope": "single-shared-policy-optimizer-step",
+        "training_scope": "bounded-shared-policy-sft-schedule",
         "dataset_revision": dataset.revision,
         "source_digest": dataset.source_digest,
         "split": split,
-        "task_indices": list(task_indices),
+        "task_indices": list(selected_task_indices),
+        "selected_task_count": len(selected_task_indices),
+        "heldout_compliance_selection_excluded": heldout_isolation,
+        "skipped_overlength_task_indices": list(skipped_overlength),
+        "training_max_sequence_length": training_sequence_limit,
+        "rollout_max_sequence_length": local_config.max_sequence_length,
+        "tasks_per_step": effective_tasks_per_step,
+        "epochs": epochs,
+        "optimizer_steps": len(schedule),
+        "schedule_digest": schedule_digest,
         "constructor_revision": examples[0].constructor_revision,
-        "batch_digest": batch.batch_digest,
+        "final_batch_digest": last_batch.batch_digest,
         "example_count": len(examples),
         "role_token_stats": _role_token_stats(examples),
         "model_id": local_config.model_id,
@@ -255,8 +328,12 @@ async def run_wideseek_sft_smoke(
             "optimizer_state_digest": checkpoint.optimizer_state_digest,
         },
         "metrics": dict(update.metrics),
+        "step_records": step_records,
         "checks": checks,
         "post_sft_compliance": compliance,
+        "direct_rl_ready": (
+            None if compliance is None else bool(compliance["readiness_gate"]["passed"])
+        ),
         "report_excludes": [
             "questions",
             "reference_answers",
@@ -267,6 +344,118 @@ async def run_wideseek_sft_smoke(
     }
     await asyncio.to_thread(_write_report, report_path, report)
     return report
+
+
+def _materialize_task_groups(
+    *,
+    dataset: Any,
+    explicit_task_indices: tuple[int, ...],
+    task_limit: int,
+    constructor: WideSeekRoleSftConstructor,
+    codec: Any,
+    training_max_sequence_length: int,
+    exclude_compliance: bool,
+) -> tuple[tuple[_TaskExamples, ...], tuple[int, ...]]:
+    if explicit_task_indices:
+        candidates = explicit_task_indices
+        required_count = len(explicit_task_indices)
+    else:
+        held_out = _compliance_indices(dataset.split) if exclude_compliance else set()
+        candidates = tuple(index for index in range(len(dataset.tasks)) if index not in held_out)
+        required_count = task_limit
+
+    groups: list[_TaskExamples] = []
+    skipped: list[int] = []
+    for task_index in candidates:
+        construction = constructor.build(dataset, task_indices=(task_index,))
+        examples = materialize_supervised_conversations(
+            construction.conversations,
+            codec,
+        )
+        longest = max(
+            len(example.encoding.prompt_ids) + len(example.encoding.target_ids)
+            for example in examples
+        )
+        if longest > training_max_sequence_length:
+            if explicit_task_indices:
+                raise ValueError(
+                    f"SFT task index {task_index} exceeds training_max_sequence_length"
+                )
+            skipped.append(task_index)
+            continue
+        groups.append(_TaskExamples(task_index=task_index, examples=examples))
+        if not explicit_task_indices and len(groups) == required_count:
+            break
+    if len(groups) != required_count:
+        raise ValueError(
+            f"only {len(groups)} eligible SFT tasks were found; required {required_count}"
+        )
+    return tuple(groups), tuple(skipped)
+
+
+def _planned_task_batches(
+    task_indices: tuple[int, ...],
+    *,
+    tasks_per_step: int,
+    epochs: int,
+    seed: int,
+) -> tuple[tuple[int, int, tuple[int, ...]], ...]:
+    if not task_indices or len(set(task_indices)) != len(task_indices):
+        raise ValueError("planned SFT task indices must be non-empty and unique")
+    if tasks_per_step < 1 or epochs < 1:
+        raise ValueError("SFT tasks_per_step and epochs must be positive")
+    result: list[tuple[int, int, tuple[int, ...]]] = []
+    for epoch_index in range(epochs):
+        ordered = tuple(
+            sorted(
+                task_indices,
+                key=lambda task_index: canonical_digest(
+                    {
+                        "seed": seed,
+                        "epoch": epoch_index,
+                        "task_index": task_index,
+                    }
+                ),
+            )
+        )
+        for step_in_epoch, offset in enumerate(range(0, len(ordered), tasks_per_step)):
+            result.append(
+                (
+                    epoch_index,
+                    step_in_epoch,
+                    ordered[offset : offset + tasks_per_step],
+                )
+            )
+    return tuple(result)
+
+
+def _readiness_gate(
+    summary: dict[str, Any],
+    checks: dict[str, bool],
+) -> dict[str, Any]:
+    episodes = int(summary["episodes"])
+    format_ok = round(float(summary["format_ok_rate"]) * episodes)
+    nonzero_outcome = round(float(summary["nonzero_outcome_rate"]) * episodes)
+    legal_spawn = round(float(summary["spawn_rate"]) * episodes)
+    contract_checks_passed = all(checks.values())
+    passed = (
+        contract_checks_passed and format_ok >= 4 and nonzero_outcome >= 2 and legal_spawn >= 12
+    )
+    return {
+        "passed": passed,
+        "thresholds": {
+            "format_ok": 4,
+            "nonzero_outcome": 2,
+            "legal_spawn": 12,
+        },
+        "observed": {
+            "episodes": episodes,
+            "format_ok": format_ok,
+            "nonzero_outcome": nonzero_outcome,
+            "legal_spawn": legal_spawn,
+            "contract_checks_passed": contract_checks_passed,
+        },
+    }
 
 
 async def _stale_revision_rejected(
@@ -327,18 +516,21 @@ def _validate_compliance_selection(
     split: WideSeekSplit,
     task_indices: tuple[int, ...],
 ) -> None:
+    overlap = tuple(sorted(set(task_indices) & _compliance_indices(split)))
+    if overlap:
+        raise ValueError(f"SFT training selection overlaps the fixed compliance profile: {overlap}")
+
+
+def _compliance_indices(split: WideSeekSplit) -> set[int]:
     from heterospawn.training.wideseek_smoke import (
         WIDESEEK_COMPLIANCE_PROFILE_V1,
     )
 
-    compliance_indices = {
+    return {
         index
         for compliance_split, index in WIDESEEK_COMPLIANCE_PROFILE_V1
         if compliance_split == split
     }
-    overlap = tuple(sorted(set(task_indices) & compliance_indices))
-    if overlap:
-        raise ValueError(f"SFT training selection overlaps the fixed compliance profile: {overlap}")
 
 
 def _file_sha256(path: Path) -> str:
