@@ -189,3 +189,10 @@ This file records milestone-level events. Fine-grained work remains in GitHub is
   the 4,096-token run because the longest actual prompt-plus-response sequence was only 2,416
   tokens. The six length-truncated episodes hit the unchanged 512-token generation limit, so
   larger total context or multi-GPU context scaling is not the next bottleneck.
+- Kept the 4,096-token context and reran the same checkpoint/profile with a 1,024-token
+  generation allowance. Success improved from 13/16 to 16/16, required format from 10/16 to
+  14/16, and length-truncated or invalid-Main episodes both fell to zero.
+- The larger allowance reduced repairs: model steps fell from 44 to 39 and total response tokens
+  from 9,840 to 6,452. Non-zero outcomes moved from 4/16 to 5/16, but mean outcome fell under the
+  stochastic single-rollout comparison and legal spawn reached only 7/16. A repeated-rollout
+  budget measurement is warranted, while direct RL and a default-budget change remain blocked.
