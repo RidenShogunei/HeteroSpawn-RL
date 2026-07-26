@@ -213,3 +213,14 @@ This file records milestone-level events. Fine-grained work remains in GitHub is
 - The fresh step-49 fixed-profile rollout passed all trajectory/revision checks. Spawn remained
   7/16; stochastic outcome counts rose while success/format each fell by one, so no reward
   improvement is claimed and the ADR-0006 scaling gate remains closed.
+
+## 2026-07-27
+
+- Accepted ADR-0008: explicitly fork the audited shared SFT checkpoint into independent Main and
+  Sub checkpoint, optimizer, weight-version, and rollout-revision lineages before the first
+  bounded fresh-alternating pilot.
+- Added a zero-step LocalHF policy-fork operation with verified source files, exact adapter and
+  optimizer-state copying, canonical source provenance in each target manifest, and independent
+  synchronization barriers. The WideSeek train smoke now accepts the audited shared checkpoint
+  for either direct shared restore or explicit independent initialization.
+
