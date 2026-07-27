@@ -625,9 +625,7 @@ class LocalHfLoraBackend:
             )
             state.optimizer.load_state_dict(optimizer_state)
             rng_state = self._torch.load(path / "rng.pt", map_location="cpu", weights_only=True)
-            self._torch.set_rng_state(rng_state["cpu"])
-            if str(self.config.device).startswith("cuda") and rng_state["cuda"]:
-                self._torch.cuda.set_rng_state_all(rng_state["cuda"])
+            self._restore_rng_state(rng_state)
             random.setstate(
                 _nested_tuple(json.loads((path / "python_random.json").read_text(encoding="utf-8")))
             )
@@ -694,9 +692,7 @@ class LocalHfLoraBackend:
                 if self._adapter_digest(state.train_adapter) != source_adapter_digest:
                     raise CheckpointIntegrityError("forked adapter differs from source manifest")
 
-            self._torch.set_rng_state(rng_state["cpu"])
-            if str(self.config.device).startswith("cuda") and rng_state["cuda"]:
-                self._torch.cuda.set_rng_state_all(rng_state["cuda"])
+            self._restore_rng_state(rng_state)
             random.setstate(
                 _nested_tuple(json.loads((path / "python_random.json").read_text(encoding="utf-8")))
             )
@@ -847,6 +843,18 @@ class LocalHfLoraBackend:
             digest.update(bytes(tensor.view(self._torch.uint8).flatten().tolist()))
         return digest.hexdigest()
 
+    def _restore_rng_state(self, rng_state: dict[str, Any]) -> None:
+        self._torch.set_rng_state(rng_state["cpu"])
+        if not str(self.config.device).startswith("cuda"):
+            return
+        device = self._torch.device(self.config.device)
+        device_index = (
+            device.index if device.index is not None else self._torch.cuda.current_device()
+        )
+        cuda_state = _cuda_rng_state_for_device(rng_state["cuda"], device_index)
+        if cuda_state is not None:
+            self._torch.cuda.set_rng_state(cuda_state, device=self.config.device)
+
     def _save_checkpoint(
         self,
         policy_id: PolicyId,
@@ -866,9 +874,9 @@ class LocalHfLoraBackend:
             self._torch.save(state.optimizer.state_dict(), temporary / "optimizer.pt")
             rng_state = {
                 "cpu": self._torch.get_rng_state(),
-                "cuda": self._torch.cuda.get_rng_state_all()
+                "cuda": self._torch.cuda.get_rng_state(self.config.device)
                 if str(self.config.device).startswith("cuda")
-                else [],
+                else None,
             }
             self._torch.save(rng_state, temporary / "rng.pt")
             (temporary / "python_random.json").write_text(
@@ -1179,6 +1187,24 @@ def _nested_tuple(value: Any) -> Any:
     if isinstance(value, list):
         return tuple(_nested_tuple(item) for item in value)
     return value
+
+
+def _cuda_rng_state_for_device(saved_state: Any, device_index: int) -> Any | None:
+    """Select one logical-device RNG state from current or legacy checkpoints."""
+
+    if saved_state is None:
+        return None
+    if not isinstance(saved_state, (list, tuple)):
+        return saved_state
+    if not saved_state:
+        return None
+    if device_index < len(saved_state):
+        return saved_state[device_index]
+    if len(saved_state) == 1:
+        return saved_state[0]
+    raise CheckpointIntegrityError(
+        "checkpoint CUDA RNG state does not contain the configured logical device"
+    )
 
 
 def _as_int(value: object, *, name: str) -> int:
