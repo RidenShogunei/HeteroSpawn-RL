@@ -223,3 +223,10 @@ This file records milestone-level events. Fine-grained work remains in GitHub is
   optimizer-state copying, canonical source provenance in each target manifest, and independent
   synchronization barriers. The WideSeek train smoke now accepts the audited shared checkpoint
   for either direct shared restore or explicit independent initialization.
+- Completed the real Qwen3-4B independent cycle from the audited shared step-48 checkpoint:
+  Main and Sub each advanced exactly once, both eight-task reward sets were non-degenerate, both
+  adapters changed, the Sub phase used a fresh Main49/Sub48 snapshot, and both phase commits
+  restored successfully.
+- Added an optimizer-free independent compliance path that requires explicit verified Main and
+  Sub checkpoint directories. It provides the missing held-out comparison without inferring roles
+  or silently reusing one checkpoint for both policies.
