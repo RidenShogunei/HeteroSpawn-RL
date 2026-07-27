@@ -1,5 +1,9 @@
 # Remote backend capability spike runbook
 
+> This is an optional framework-investigation runbook, not the current training path. For the
+> supported project-owned Qwen3-4B QLoRA workflow, use the
+> [Qwen3-4B + WideSeek end-to-end guide](qwen3-wideseek-end-to-end.md).
+
 This runbook is the entry point for an agent working on the remote GPU host. Read `AGENTS.md`,
 the architecture baseline's Milestone 2.5 section, applicable backend ADRs, and this file before
 installing a framework or changing code.
