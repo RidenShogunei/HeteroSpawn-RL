@@ -7,10 +7,30 @@ import pytest
 from pydantic import ValidationError
 
 from heterospawn.backends.local_hf import load_local_checkpoint_ref
+from heterospawn.backends.local_hf.backend import _cuda_rng_state_for_device
 from heterospawn.backends.local_hf.config import LocalLoraConfig
 from heterospawn.cli import _local_lora_config, build_parser
 from heterospawn.domain.training import canonical_digest
 from heterospawn.errors import CheckpointIntegrityError
+
+
+def test_legacy_multi_gpu_rng_state_restores_only_configured_device() -> None:
+    saved_states = tuple(f"state-{index}" for index in range(9))
+
+    assert _cuda_rng_state_for_device(saved_states, 0) == "state-0"
+    assert _cuda_rng_state_for_device(saved_states, 8) == "state-8"
+
+
+def test_compact_cuda_rng_state_is_visible_device_count_independent() -> None:
+    compact_state = object()
+
+    assert _cuda_rng_state_for_device(compact_state, 0) is compact_state
+    assert _cuda_rng_state_for_device((compact_state,), 3) is compact_state
+
+
+def test_legacy_cuda_rng_state_rejects_missing_ambiguous_device() -> None:
+    with pytest.raises(CheckpointIntegrityError, match="configured logical device"):
+        _cuda_rng_state_for_device(("state-0", "state-1"), 3)
 
 
 def test_model_manifest_identity_is_complete_and_preferred() -> None:
@@ -214,6 +234,25 @@ def test_wideseek_compliance_exposes_checkpoint_only_rollout() -> None:
 
     assert args.checkpoint_dir == Path("checkpoint")
     assert args.max_sequence_length == 8192
+
+
+def test_wideseek_compliance_exposes_independent_checkpoint_pair() -> None:
+    args = build_parser().parse_args(
+        [
+            "wideseek-compliance-baseline",
+            "--topology",
+            "independent",
+            "--model-path",
+            "model",
+            "--main-checkpoint-dir",
+            "main",
+            "--sub-checkpoint-dir",
+            "sub",
+        ]
+    )
+
+    assert args.main_checkpoint_dir == Path("main")
+    assert args.sub_checkpoint_dir == Path("sub")
 
 
 def test_wideseek_recovery_cli_exposes_durable_phase_identity() -> None:

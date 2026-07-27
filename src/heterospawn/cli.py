@@ -541,6 +541,16 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     wideseek_compliance.add_argument(
+        "--main-checkpoint-dir",
+        type=Path,
+        help="restore and sync the verified Main checkpoint for independent evaluation",
+    )
+    wideseek_compliance.add_argument(
+        "--sub-checkpoint-dir",
+        type=Path,
+        help="restore and sync the verified Sub checkpoint for independent evaluation",
+    )
+    wideseek_compliance.add_argument(
         "--do-sample",
         action="store_true",
         help="sample from the raw policy instead of using greedy generation",
@@ -1000,8 +1010,22 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "wideseek-compliance-baseline":
         if args.model_path is None and not args.allow_model_download:
             raise SystemExit("--allow-model-download is required when --model-path is omitted")
+        role_checkpoint_dirs = (args.main_checkpoint_dir, args.sub_checkpoint_dir)
+        if args.checkpoint_dir is not None and any(
+            path is not None for path in role_checkpoint_dirs
+        ):
+            raise SystemExit("--checkpoint-dir cannot be combined with role-specific checkpoints")
+        if any(path is not None for path in role_checkpoint_dirs) and not all(
+            path is not None for path in role_checkpoint_dirs
+        ):
+            raise SystemExit(
+                "independent evaluation requires both --main-checkpoint-dir "
+                "and --sub-checkpoint-dir"
+            )
         if args.checkpoint_dir is not None and args.topology != "shared":
-            raise SystemExit("--checkpoint-dir currently requires --topology shared")
+            raise SystemExit("--checkpoint-dir requires --topology shared")
+        if args.main_checkpoint_dir is not None and args.topology != "independent":
+            raise SystemExit("role-specific checkpoints require --topology independent")
         from heterospawn.training.wideseek_smoke import (
             WIDESEEK_COMPLIANCE_PROFILE_V1,
             run_wideseek_compliance_baseline,
@@ -1027,6 +1051,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                 ),
                 report_path=args.report,
                 checkpoint_dir=args.checkpoint_dir,
+                main_checkpoint_dir=args.main_checkpoint_dir,
+                sub_checkpoint_dir=args.sub_checkpoint_dir,
                 do_sample=args.do_sample,
                 max_search_message_results=args.max_search_message_results,
                 max_search_content_characters=args.max_search_content_characters,

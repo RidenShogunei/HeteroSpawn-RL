@@ -223,3 +223,19 @@ This file records milestone-level events. Fine-grained work remains in GitHub is
   optimizer-state copying, canonical source provenance in each target manifest, and independent
   synchronization barriers. The WideSeek train smoke now accepts the audited shared checkpoint
   for either direct shared restore or explicit independent initialization.
+- Completed the real Qwen3-4B independent cycle from the audited shared step-48 checkpoint:
+  Main and Sub each advanced exactly once, both eight-task reward sets were non-degenerate, both
+  adapters changed, the Sub phase used a fresh Main49/Sub48 snapshot, and both phase commits
+  restored successfully.
+- Added an optimizer-free independent compliance path that requires explicit verified Main and
+  Sub checkpoint directories. It provides the missing held-out comparison without inferring roles
+  or silently reusing one checkpoint for both policies.
+- The held-out run exposed a legacy checkpoint portability bug: a checkpoint created while nine
+  CUDA devices were visible could not restore when evaluation intentionally exposed only one.
+  LocalHF now restores only the configured logical device from legacy RNG arrays and writes only
+  that single-device RNG state in new checkpoints.
+- Completed the preregistered optimizer-free Qwen3-4B comparison on 16 held-out tasks with two
+  rollouts per task for SFT48, shared-RL49, and independent Main49/Sub49. All 96 episodes preserved
+  exact trajectories and unchanged weights. Neither RL condition established a reliable quality
+  gain under task-cluster bootstrap; independent RL had lower mean and non-zero outcome point
+  estimates than SFT, so no improvement claim is made.

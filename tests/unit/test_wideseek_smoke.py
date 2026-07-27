@@ -244,6 +244,49 @@ def test_compliance_cli_parses_explicit_split_indices() -> None:
         build_parser().parse_args(["wideseek-compliance-baseline", "--task", "unknown:0"])
 
 
+def test_compliance_cli_exposes_independent_checkpoint_pair() -> None:
+    args = build_parser().parse_args(
+        [
+            "wideseek-compliance-baseline",
+            "--topology",
+            "independent",
+            "--model-path",
+            "model",
+            "--main-checkpoint-dir",
+            "main-checkpoint",
+            "--sub-checkpoint-dir",
+            "sub-checkpoint",
+        ]
+    )
+
+    assert args.topology == "independent"
+    assert args.main_checkpoint_dir == Path("main-checkpoint")
+    assert args.sub_checkpoint_dir == Path("sub-checkpoint")
+
+
+@pytest.mark.asyncio
+async def test_compliance_rejects_incomplete_independent_checkpoint_pair(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(ValueError, match="both Main and Sub"):
+        await run_wideseek_compliance_baseline(
+            topology="independent",
+            task_selection=(("width_20k", 0),),
+            rollouts_per_task=1,
+            data_manifest_path=tmp_path / "missing.json",
+            data_dir=tmp_path,
+            service_url="http://unused.invalid",
+            qdrant_url="http://unused.invalid",
+            local_config=LocalLoraConfig(
+                device="cpu",
+                dtype="float32",
+                artifact_dir=tmp_path / "checkpoints",
+            ),
+            report_path=tmp_path / "report.json",
+            main_checkpoint_dir=tmp_path / "main",
+        )
+
+
 def test_independent_train_accepts_explicit_shared_checkpoint_fork() -> None:
     args = build_parser().parse_args(
         [
