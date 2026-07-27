@@ -234,3 +234,8 @@ This file records milestone-level events. Fine-grained work remains in GitHub is
   CUDA devices were visible could not restore when evaluation intentionally exposed only one.
   LocalHF now restores only the configured logical device from legacy RNG arrays and writes only
   that single-device RNG state in new checkpoints.
+- Completed the preregistered optimizer-free Qwen3-4B comparison on 16 held-out tasks with two
+  rollouts per task for SFT48, shared-RL49, and independent Main49/Sub49. All 96 episodes preserved
+  exact trajectories and unchanged weights. Neither RL condition established a reliable quality
+  gain under task-cluster bootstrap; independent RL had lower mean and non-zero outcome point
+  estimates than SFT, so no improvement claim is made.
