@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import gc
 import hashlib
+import importlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -740,7 +741,7 @@ def _write_json(path: Path, payload: dict[str, Any]) -> None:
 async def _release_accelerator_memory() -> None:
     gc.collect()
     try:
-        import torch
+        torch = importlib.import_module("torch")
     except ImportError:
         return
     if torch.cuda.is_available():
