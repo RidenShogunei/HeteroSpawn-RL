@@ -1,0 +1,62 @@
+{
+  "schema_revision": "heterospawn-wideseek-experiment-v1",
+  "experiment_id": "wideseek-qwen3-4b-2080ti-v1",
+  "model_profile": "qwen3-4b",
+  "max_sequence_length": 4096,
+  "max_new_tokens": 1024,
+  "do_sample": true,
+  "judge_mode": "none",
+  "sft": {
+    "split": "hybrid_20k",
+    "task_limit": 192,
+    "tasks_per_step": 4,
+    "epochs": 1,
+    "training_max_sequence_length": 2304
+  },
+  "rl": {
+    "split": "width_20k",
+    "task_indices": [
+      1,
+      2500,
+      5000,
+      7500,
+      10000,
+      12500,
+      15000,
+      17500
+    ],
+    "rollouts_per_task": 8,
+    "shared_cycles": 1,
+    "independent_cycles": 1,
+    "require_sub_update": true,
+    "require_learning_signal": true
+  },
+  "evaluation": {
+    "tasks": [
+      {"split": "width_20k", "task_index": 0},
+      {"split": "width_20k", "task_index": 3999},
+      {"split": "width_20k", "task_index": 7999},
+      {"split": "width_20k", "task_index": 11999},
+      {"split": "width_20k", "task_index": 15999},
+      {"split": "width_20k", "task_index": 19999},
+      {"split": "depth_20k", "task_index": 0},
+      {"split": "depth_20k", "task_index": 4999},
+      {"split": "depth_20k", "task_index": 9999},
+      {"split": "depth_20k", "task_index": 14999},
+      {"split": "depth_20k", "task_index": 19999},
+      {"split": "hybrid_20k", "task_index": 0},
+      {"split": "hybrid_20k", "task_index": 4999},
+      {"split": "hybrid_20k", "task_index": 9999},
+      {"split": "hybrid_20k", "task_index": 14999},
+      {"split": "hybrid_20k", "task_index": 19999}
+    ],
+    "rollouts_per_task": 2,
+    "bootstrap_samples": 10000,
+    "bootstrap_seed": 20260727
+  },
+  "tools": {
+    "search_results": 3,
+    "search_content_characters": 600,
+    "access_characters": 800
+  }
+}

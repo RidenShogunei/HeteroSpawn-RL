@@ -1,10 +1,18 @@
 # HeteroSpawn-RL 项目设计书
 
 > 暂定项目名：**HeteroSpawn-RL**  
-> 文档状态：Architecture Baseline v0.3
+> 文档状态：Architecture Baseline v0.4
 > 目标读者：项目成员、本地 coding agent、后续复现实验人员  
 > 文档目的：指导一个独立新仓库从零实现“异构 Main/Sub、动态 spawn、fresh-rollout 交替强化学习”的 Deep Research 系统  
 > 重要说明：本项目采用 WideSeek-R1 的任务、工具与奖励环境语义，但保留自有 rollout、LoRA 训练、版本同步和 phase transaction；不依赖 RLinf 运行时。
+
+### v0.4 变更摘要
+
+- 将 Qwen3-4B/WideSeek 的 SFT、shared RL、独立 Main/Sub RL 和 held-out 评测收口为一个正式实验配置与 `wideseek-run` 总入口。
+- 每个实验使用唯一 run directory、原子 `state.json`、不可变 checkpoint 身份和报告 digest；`--resume` 只从第一个未提交 stage 继续。
+- 独立拓扑支持从完整 Main/Sub checkpoint pair 继续后续 cycle，不再把每次独立训练当作一次性 pilot。
+- 三个条件必须使用相同 task、sampling、tool budget、environment 和 evaluator 契约，并使用 paired task-cluster bootstrap 生成统一比较报告。
+- stage-level smoke/contract 命令保留为诊断工具；仓库的 operational source of truth 是最新 main、固定配置和端到端 runbook，而不是历史实验 clone。
 
 ### v0.3 变更摘要
 
