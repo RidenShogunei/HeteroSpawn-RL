@@ -244,26 +244,6 @@ def test_compliance_cli_parses_explicit_split_indices() -> None:
         build_parser().parse_args(["wideseek-compliance-baseline", "--task", "unknown:0"])
 
 
-def test_compliance_cli_exposes_independent_checkpoint_pair() -> None:
-    args = build_parser().parse_args(
-        [
-            "wideseek-compliance-baseline",
-            "--topology",
-            "independent",
-            "--model-path",
-            "model",
-            "--main-checkpoint-dir",
-            "main-checkpoint",
-            "--sub-checkpoint-dir",
-            "sub-checkpoint",
-        ]
-    )
-
-    assert args.topology == "independent"
-    assert args.main_checkpoint_dir == Path("main-checkpoint")
-    assert args.sub_checkpoint_dir == Path("sub-checkpoint")
-
-
 @pytest.mark.asyncio
 async def test_compliance_rejects_incomplete_independent_checkpoint_pair(
     tmp_path: Path,

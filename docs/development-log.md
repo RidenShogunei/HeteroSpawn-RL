@@ -239,3 +239,13 @@ This file records milestone-level events. Fine-grained work remains in GitHub is
   exact trajectories and unchanged weights. Neither RL condition established a reliable quality
   gain under task-cluster bootstrap; independent RL had lower mean and non-zero outcome point
   estimates than SFT, so no improvement claim is made.
+
+### Documentation consolidation
+
+- Replaced the overlapping WideSeek offline-environment and SFT runbooks with one canonical
+  Qwen3-4B end-to-end guide covering verified assets, isolated policy/retrieval environments,
+  SFT, shared and independent RL, checkpoint-only evaluation, and crash recovery.
+- Reduced the repository README to the current supported path and separated operational
+  guidance from immutable ADR and validation history.
+- Added a validation-report index and removed one duplicate CLI parser test already covered by
+  the LocalHF configuration suite.

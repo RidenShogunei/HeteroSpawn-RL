@@ -81,4 +81,4 @@ checks the pinned corpus and E5 manifests, Qdrant collection state and vector/HN
 then performs a real Search-to-Access probe without printing its query, URL, snippet, or page.
 
 Deployment instructions are in the
-[offline environment runbook](../runbooks/wideseek-offline-environment.md).
+[Qwen3-4B + WideSeek end-to-end guide](../runbooks/qwen3-wideseek-end-to-end.md).

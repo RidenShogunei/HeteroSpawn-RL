@@ -1,174 +1,104 @@
 # HeteroSpawn-RL
 
-HeteroSpawn-RL studies dynamic heterogeneous agent spawning with fresh-rollout alternating policy optimization for deep-research tasks.
+HeteroSpawn-RL is a research implementation of dynamic Main/Sub agent spawning for
+deep-research reinforcement learning. Its current runnable path uses:
 
-The project is deliberately staged:
+- `Qwen/Qwen3-4B` with 4-bit QLoRA on an 11 GB Turing GPU;
+- the pinned WideSeek-R1 training data and offline Wiki-2018 Search/Access environment;
+- project-owned exact-token rollout, LoRA update, checkpoint, synchronization, and recovery;
+- either a shared-policy baseline or independent Main/Sub policies with fresh alternating
+  updates.
 
-1. CPU-only domain contracts and mock orchestration.
-2. API-first benchmark validation with xbench-DeepSearch and MiniMax.
-3. Exact-token local-model rollout and independent Main/Sub training backends.
-4. A provider-neutral WideSeek-R1 training environment with multi-turn Search/Access.
+The complete setup and experiment sequence is in the
+[Qwen3-4B + WideSeek end-to-end guide](docs/runbooks/qwen3-wideseek-end-to-end.md).
+Use that guide as the operational source of truth.
 
-The authoritative architecture is [HeteroSpawn_DeepResearch_RL_Project_Design.md](HeteroSpawn_DeepResearch_RL_Project_Design.md). Significant decisions are recorded under `docs/adr/`; implementation work is linked to GitHub issues, milestones, commits, and pull requests.
+## What works
 
-## Development setup
+The repository can currently run:
+
+1. verified asset download with official-to-mirror fallback;
+2. answer-safe role-targeted SFT construction and a bounded Qwen3-4B SFT warm start;
+3. real multi-round Main spawn and Sub Search/Access rollout against offline WideSeek;
+4. one shared-policy RL cycle or one independent Main-first fresh-alternating cycle;
+5. exact token/log-probability training batches, immutable checkpoints, explicit rollout sync,
+   and crash-safe phase recovery;
+6. update-free held-out comparison of the SFT, shared-RL, and independent-RL checkpoints.
+
+This validates the architecture and training path. It does **not** reproduce WideSeek-R1's
+large-scale distributed training or establish a competitive benchmark score. The latest
+held-out comparison found no statistically reliable quality improvement after the bounded
+one-cycle pilots; see the
+[validation report](docs/validation/2026-07-27-qwen3-4b-heldout-sft-rl-comparison.md).
+
+## Architecture
+
+```mermaid
+flowchart LR
+    D["Pinned WideSeek tasks"] --> L["Main/Sub agent loop"]
+    R["Offline Qdrant + E5<br/>Search / Access"] <--> L
+    L --> T["Exact raw trajectories"]
+    T --> W["Versioned reward + batch builder"]
+    W --> B["LocalHF QLoRA backend"]
+    B --> C["Immutable checkpoint"]
+    C --> S["Explicit rollout sync"]
+    S --> L
+    C --> P["Crash-safe phase commit"]
+```
+
+The domain and orchestration layers are provider-neutral. MiniMax, xbench, WideSeek,
+LocalHF, and optional rollout engines live behind explicit interfaces. Roles, policies,
+episodes, weight versions, rollout revisions, and environment revisions are structured
+fields rather than prompt-derived conventions.
+
+## Developer setup
+
+For the CPU test suite:
 
 ```bash
-python -m venv .venv
+python3.11 -m venv .venv
+source .venv/bin/activate
 python -m pip install --upgrade pip
 python -m pip install -e ".[dev]"
 python -m pytest
 python -m ruff check .
+python -m ruff format --check .
 python -m mypy src
 ```
 
-### Optional local single-GPU contract
+On Windows PowerShell, activate with `.venv\Scripts\Activate.ps1`. GPU experiments require
+Linux and isolated QLoRA/retrieval environments as described in the end-to-end guide.
 
-Install CUDA PyTorch for the host first, then install the isolated local-model dependencies:
+## Command map
 
-```bash
-python -m venv .venv
-.venv/Scripts/python -m pip install torch==2.4.0 --index-url https://download.pytorch.org/whl/cu121
-.venv/Scripts/python -m pip install -e ".[dev,local]"
-.venv/Scripts/heterospawn local-contract-smoke --allow-model-download
-```
+Current Qwen3/WideSeek workflow:
 
-The smoke uses the pinned `Qwen/Qwen2.5-0.5B-Instruct` commit with FP16 and separate Main/Sub LoRA train and rollout adapters. Checkpoints and the credential-safe JSON report are written under ignored `artifacts/`. A previously downloaded model directory can be supplied with `--model-path`; its weight SHA-256 must match the pinned revision.
+| Command | Purpose |
+| --- | --- |
+| `wideseek-fetch-assets` | Download or verify pinned model, data, corpus, and retriever assets |
+| `wideseek-inspect-data` | Validate a WideSeek split without exposing references |
+| `wideseek-sft-dry-run` | Validate answer-safe role-targeted SFT construction |
+| `wideseek-check-environment` | Verify offline Qdrant/E5 Search/Access |
+| `wideseek-rollout-smoke` | Run one real Search-to-Access environment probe |
+| `wideseek-compliance-baseline` | Evaluate base/shared/independent checkpoints with zero updates |
+| `wideseek-sft-train` | Run the bounded multi-step shared-policy SFT warm start |
+| `wideseek-train-smoke` | Run one shared or independent RL cycle |
+| `wideseek-recover-phase` | Recover a durable optimizer phase without replaying rollout |
 
-For research-scale behavior checks on an 11 GB Turing GPU, install the isolated QLoRA profile and
-use the committed multi-shard manifest:
+Contract and historical diagnostics such as `local-contract-smoke`,
+`vllm-rollout-contract-smoke`, xbench, and API-backed commands remain available, but they
+are not part of the current Qwen3/WideSeek training recipe.
 
-```bash
-python -m pip install -e ".[dev,qlora]"
-heterospawn wideseek-fetch-assets \
-  --manifest manifests/qwen3-4b.json \
-  --destination "$HOME/heterospawn-runtime/models/Qwen3-4B"
-heterospawn local-contract-smoke \
-  --model-profile qwen3-4b \
-  --model-path "$HOME/heterospawn-runtime/models/Qwen3-4B" \
-  --model-manifest manifests/qwen3-4b.json
-```
+## Documentation
 
-This profile uses pinned `Qwen/Qwen3-4B`, NF4 4-bit base weights, FP16 compute, gradient
-checkpointing, non-thinking 4096-token prompts, and independent rank-8 LoRA adapters. The 0.5B
-profile remains the default contract and CI model; Qwen3-4B must always be selected explicitly.
+- [Architecture baseline](HeteroSpawn_DeepResearch_RL_Project_Design.md)
+- [End-to-end Qwen3/WideSeek guide](docs/runbooks/qwen3-wideseek-end-to-end.md)
+- [WideSeek environment semantics](docs/benchmarks/wideseek-r1.md)
+- [Architecture decision records](docs/adr/)
+- [Validation report index](docs/validation/README.md)
+- [Development log](docs/development-log.md)
+- [Optional backend-spike runbook](docs/runbooks/remote-backend-spike.md)
 
-### Optional standalone vLLM rollout
-
-Linux hosts with Turing GPUs can keep training in the project-owned LocalHF backend while moving
-generation to isolated vLLM V0/XFormers workers:
-
-```bash
-uv venv "$HOME/heterospawn-runtime/vllm-product/.venv" --python 3.11
-uv pip install \
-  --python "$HOME/heterospawn-runtime/vllm-product/.venv/bin/python" \
-  -e ".[dev,vllm-turing]"
-
-"$HOME/heterospawn-runtime/vllm-product/.venv/bin/heterospawn" \
-  vllm-rollout-contract-smoke \
-  --model-path /absolute/path/to/Qwen2.5-0.5B-Instruct \
-  --training-device cuda:3 \
-  --main-rollout-device 1 \
-  --sub-rollout-device 2
-```
-
-The conformance command intentionally uses one training GPU and one rollout GPU per independently
-versioned policy. Each rollout worker receives an environment allowlist, an isolated home
-directory, offline Hugging Face settings, and only a verified local base model plus immutable PEFT
-LoRA artifact. Synchronization stops the old worker, loads and hashes the replacement, and
-publishes a new `RolloutRevision` only after verification; a failed replacement rebuilds the
-previous worker.
-
-The command also runs two complete trainable `Main → Sub → Main` rollouts in each alternating
-phase. It verifies task-level outcome normalization, episode-balanced batches, Main-first fresh
-rollouts, independent Main/Sub updates, and exact raw-trajectory-to-training-sample round-trip.
-The smoke uses constrained decoding and a synthetic non-scientific reward only to make this path
-deterministic; benchmark training must provide its own versioned reward and sampling configuration.
-
-The pinned compatibility stack remains an optional rollout-only dependency. It does not own
-optimizer state, training batches, checkpoint recovery, or advantage semantics. See the
-[rollout product validation](docs/validation/2026-07-23-vllm-product-rollout-contract.md) and
-[trainable-cycle validation](docs/validation/2026-07-23-trainable-episode-cycle.md).
-
-### WideSeek training data
-
-Install the optional Hub dependency, then download and verify the pinned training splits:
-
-```bash
-python -m pip install -e ".[wideseek]"
-heterospawn wideseek-fetch-assets
-heterospawn wideseek-inspect-data --split hybrid_20k
-heterospawn wideseek-sft-dry-run --split hybrid_20k --task-limit 8
-```
-
-The fetcher uses bounded official-to-mirror fallback, resumable partial downloads, and committed
-per-file content digests. Copied assets can be checked offline with `--verify-only`; runtime data
-and reference answers are never committed or printed. See the
-[WideSeek environment guide](docs/benchmarks/wideseek-r1.md).
-
-The SFT dry run constructs only post-evidence Main final-answer and Sub summary examples in
-memory; it does not train a model or supervise spawn/Search/Access choices. See the
-[warm-start runbook](docs/runbooks/wideseek-sft-warm-start.md).
-
-The opt-in `wideseek-sft-smoke` command uses the isolated LocalHF QLoRA environment to execute one
-shared-policy supervised update, checkpoint, sync, stale-revision rejection, and replacement
-restore. It is a contract smoke, not a benchmark or a completed warm-start experiment.
-
-After that contract passes, `wideseek-sft-train` runs a deterministic held-out-disjoint multi-step
-warm start. Its training-only sequence cap can remain at 2,304 tokens on an RTX 2080 Ti while the
-post-SFT rollout context stays at the fixed 4,096-token baseline. See the warm-start runbook for
-the pinned 192-task/4-tasks-per-step profile and reporting rules.
-
-The complete offline environment additionally uses the pinned 156 GB Wiki-2018/Qdrant corpus and
-E5-base-v2. Its Linux launcher verifies every source file, starts a mutable Qdrant deployment and
-the pinned upstream retrieval server, then runs:
-
-```bash
-heterospawn wideseek-check-environment
-heterospawn wideseek-rollout-smoke
-heterospawn wideseek-compliance-baseline \
-  --model-profile qwen3-4b \
-  --model-path /absolute/path/to/Qwen3-4B \
-  --model-manifest manifests/qwen3-4b.json \
-  --do-sample
-heterospawn wideseek-train-smoke \
-  --topology shared \
-  --model-profile qwen3-4b \
-  --model-path /absolute/path/to/Qwen3-4B \
-  --model-manifest manifests/qwen3-4b.json \
-  --max-sequence-length 4096 \
-  --max-new-tokens 1024 \
-  --max-search-message-results 3 \
-  --max-search-content-characters 600 \
-  --max-access-characters 800 \
-  --do-sample
-```
-
-The compliance baseline runs a fixed, answer-independent set of 16 tasks spanning width, depth,
-and hybrid splits. It performs no optimizer update and verifies that policy revisions and adapter
-hashes remain unchanged while measuring legal spawn, tool use, answer format, exact outcome, and
-truncation. Use its redacted report to decide whether the base policy is ready for a direct RL
-pilot or first needs a small tool/output-format warm start.
-
-See the [offline deployment runbook](docs/runbooks/wideseek-offline-environment.md) before
-allocating disk, host RAM, and one retrieval GPU.
-
-### Remote backend capability spikes
-
-Remote agents must follow [the remote backend spike runbook](docs/runbooks/remote-backend-spike.md) and run `python3 scripts/remote_preflight.py` before installing or evaluating verl/RLinf. The runbook keeps candidate environments isolated, forbids credentials and benchmark data, and defines the evidence required before a backend-selection ADR.
-
-API keys are read only from environment variables. Copy `.env.example` to `.env` for local use, and never commit the resulting file. API-backed episodes are evaluation artifacts and are not eligible for RL training unless the policy backend supplies exact rollout token IDs, old log-probabilities, and an auditable rollout revision.
-
-The first runnable slice is documented in [docs/benchmarks/xbench-deepsearch.md](docs/benchmarks/xbench-deepsearch.md). It keeps xbench ground truth behind the evaluator, uses MiniMax through the current OpenAI-compatible endpoint for policy calls and optional development judging, and keeps search behind a provider-neutral interface with deterministic mock, Tavily, and MiniMax Token Plan MCP backends.
-
-## Current status
-
-Architecture Baseline v0.3 adopts WideSeek-R1 as the primary RL environment while retaining the
-project-owned exact-token LocalHF training and optional restart-synchronized vLLM rollout paths.
-The provider-neutral task boundary, bounded multi-round Main/Sub loop, pinned training-data
-loader, semantic evaluator, role-specific reward contracts, offline Search/Access client, shared
-joint update, independent fresh alternating update, and crash-safe recovery are wired into one
-CLI-driven training cycle. The pinned 0.5B model remains the inexpensive contract baseline, while
-the explicit Qwen3-4B QLoRA profile is the research-scale policy path for 11 GB Turing GPUs. The
-complete 156 GB environment remains an opt-in remote acceptance run. xbench is held-out
-generalization evaluation and no longer has a dedicated training reward path.
+Runtime assets, checkpoints, raw traces, retrieved text, and credentials must remain outside
+Git or below ignored `artifacts/`. API credentials are accepted only through process
+environment variables.
