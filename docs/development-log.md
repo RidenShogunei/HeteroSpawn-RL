@@ -230,3 +230,7 @@ This file records milestone-level events. Fine-grained work remains in GitHub is
 - Added an optimizer-free independent compliance path that requires explicit verified Main and
   Sub checkpoint directories. It provides the missing held-out comparison without inferring roles
   or silently reusing one checkpoint for both policies.
+- The held-out run exposed a legacy checkpoint portability bug: a checkpoint created while nine
+  CUDA devices were visible could not restore when evaluation intentionally exposed only one.
+  LocalHF now restores only the configured logical device from legacy RNG arrays and writes only
+  that single-device RNG state in new checkpoints.
