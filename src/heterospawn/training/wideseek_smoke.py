@@ -458,6 +458,8 @@ async def run_wideseek_compliance_baseline(
     local_config: LocalLoraConfig,
     report_path: Path,
     checkpoint_dir: Path | None = None,
+    main_checkpoint_dir: Path | None = None,
+    sub_checkpoint_dir: Path | None = None,
     tool_service: WideSeekLocalToolService | None = None,
     backend: _ComplianceBackend | None = None,
     do_sample: bool = True,
@@ -471,10 +473,21 @@ async def run_wideseek_compliance_baseline(
         raise ValueError("compliance task selection must be non-empty and unique")
     if rollouts_per_task < 1:
         raise ValueError("compliance baseline requires at least one rollout per task")
-    if checkpoint_dir is not None and backend is not None:
-        raise ValueError("checkpoint_dir cannot be combined with an injected backend")
+    role_checkpoint_dirs = (main_checkpoint_dir, sub_checkpoint_dir)
+    if checkpoint_dir is not None and any(path is not None for path in role_checkpoint_dirs):
+        raise ValueError("shared and role-specific checkpoint arguments are mutually exclusive")
+    if any(path is not None for path in role_checkpoint_dirs) and not all(
+        path is not None for path in role_checkpoint_dirs
+    ):
+        raise ValueError("independent compliance requires both Main and Sub checkpoints")
+    if (
+        checkpoint_dir is not None or any(path is not None for path in role_checkpoint_dirs)
+    ) and backend is not None:
+        raise ValueError("checkpoint arguments cannot be combined with an injected backend")
     if checkpoint_dir is not None and topology != "shared":
         raise ValueError("one checkpoint directory can restore only the shared topology")
+    if main_checkpoint_dir is not None and topology != "independent":
+        raise ValueError("role-specific checkpoints require the independent topology")
 
     manifest = load_asset_manifest(data_manifest_path)
     expected_by_split = {
@@ -526,10 +539,39 @@ async def run_wideseek_compliance_baseline(
             restored_version = await local_backend.restore_checkpoint(checkpoint)
             await local_backend.sync_rollout_weights(checkpoint.policy_id, restored_version)
             loaded_checkpoint = {
+                "initialization": "shared_checkpoint_restore",
                 "checkpoint_id": str(checkpoint.checkpoint_id),
                 "policy_id": str(checkpoint.policy_id),
                 "optimizer_step": restored_version.optimizer_step,
                 "checkpoint_digest": restored_version.checkpoint_digest,
+            }
+        elif main_checkpoint_dir is not None and sub_checkpoint_dir is not None:
+            checkpoint_dirs = {
+                PolicyId("main"): main_checkpoint_dir,
+                PolicyId("sub"): sub_checkpoint_dir,
+            }
+            restored_checkpoints = []
+            for policy_id, directory in checkpoint_dirs.items():
+                checkpoint = load_local_checkpoint_ref(directory)
+                if checkpoint.policy_id != policy_id:
+                    raise ValueError(f"{policy_id} checkpoint does not match its compliance policy")
+                restored_version = await local_backend.restore_checkpoint(checkpoint)
+                revision = await local_backend.sync_rollout_weights(
+                    policy_id,
+                    restored_version,
+                )
+                restored_checkpoints.append(
+                    {
+                        "checkpoint_id": str(checkpoint.checkpoint_id),
+                        "policy_id": str(policy_id),
+                        "optimizer_step": restored_version.optimizer_step,
+                        "checkpoint_digest": restored_version.checkpoint_digest,
+                        "rollout_replica_set_revision": revision.replica_set_revision,
+                    }
+                )
+            loaded_checkpoint = {
+                "initialization": "independent_checkpoint_restore",
+                "targets": restored_checkpoints,
             }
         active_backend: _ComplianceBackend = local_backend
     else:
@@ -659,7 +701,7 @@ async def run_wideseek_compliance_baseline(
         for split in requested_splits
     }
     report: dict[str, Any] = {
-        "schema_revision": "heterospawn-wideseek-compliance-v2",
+        "schema_revision": "heterospawn-wideseek-compliance-v3",
         "status": "passed",
         "comparable_to_official": False,
         "optimizer_updates": 0,
