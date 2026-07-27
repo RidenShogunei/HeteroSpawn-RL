@@ -885,6 +885,10 @@ async def run_wideseek_train_smoke(
     transaction_dir: Path,
     report_path: Path,
     checkpoint_dir: Path | None = None,
+    main_checkpoint_dir: Path | None = None,
+    sub_checkpoint_dir: Path | None = None,
+    cycle_index: int = 0,
+    experiment_id: str | None = None,
     require_sub_update: bool = False,
     require_learning_signal: bool = False,
     tool_service: WideSeekLocalToolService | None = None,
@@ -893,10 +897,23 @@ async def run_wideseek_train_smoke(
     max_search_content_characters: int = 3000,
     max_access_characters: int = 2000,
 ) -> dict[str, Any]:
-    """Run one short real-model WideSeek cycle and emit only safe aggregates."""
+    """Run one versioned real-model WideSeek cycle and emit only safe aggregates."""
 
     if rollouts_per_task < 2:
-        raise ValueError("WideSeek train smoke requires at least two rollouts per task")
+        raise ValueError("WideSeek training requires at least two rollouts per task")
+    if cycle_index < 0:
+        raise ValueError("cycle_index cannot be negative")
+    if experiment_id is not None and not experiment_id.strip():
+        raise ValueError("experiment_id cannot be empty")
+    role_checkpoint_dirs = (main_checkpoint_dir, sub_checkpoint_dir)
+    if checkpoint_dir is not None and any(path is not None for path in role_checkpoint_dirs):
+        raise ValueError("shared and role-specific checkpoint arguments are mutually exclusive")
+    if any(path is not None for path in role_checkpoint_dirs) and not all(
+        path is not None for path in role_checkpoint_dirs
+    ):
+        raise ValueError("independent training requires both Main and Sub checkpoints")
+    if any(path is not None for path in role_checkpoint_dirs) and topology != "independent":
+        raise ValueError("role-specific checkpoints require the independent topology")
     manifest = load_asset_manifest(data_manifest_path)
     filename = f"{split}.jsonl"
     expected = next((file for file in manifest.files if file.path == filename), None)
@@ -1002,6 +1019,31 @@ async def run_wideseek_train_smoke(
                     loaded_checkpoint["target_lineage_verified"],
                 )
             )
+    elif main_checkpoint_dir is not None and sub_checkpoint_dir is not None:
+        restored_targets: list[dict[str, Any]] = []
+        for policy_id, directory in (
+            (PolicyId("main"), main_checkpoint_dir),
+            (PolicyId("sub"), sub_checkpoint_dir),
+        ):
+            checkpoint = load_local_checkpoint_ref(directory)
+            if checkpoint.policy_id != policy_id:
+                raise ValueError(f"{policy_id} checkpoint does not match its training policy")
+            restored_version = await backend.restore_checkpoint(checkpoint)
+            revision = await backend.sync_rollout_weights(policy_id, restored_version)
+            restored_targets.append(
+                {
+                    "checkpoint_id": str(checkpoint.checkpoint_id),
+                    "policy_id": str(policy_id),
+                    "optimizer_step": restored_version.optimizer_step,
+                    "checkpoint_digest": restored_version.checkpoint_digest,
+                    "optimizer_state_digest": checkpoint.optimizer_state_digest,
+                    "rollout_replica_set_revision": revision.replica_set_revision,
+                }
+            )
+        loaded_checkpoint = {
+            "initialization": "independent_checkpoint_restore",
+            "targets": restored_targets,
+        }
     main_id = policy_ids[0]
     sub_id = main_id if topology == "shared" else PolicyId("sub")
     registry = PolicyRegistry(
@@ -1072,6 +1114,7 @@ async def run_wideseek_train_smoke(
         {
             "topology": topology,
             "split": split,
+            "cycle_index": cycle_index,
             "task_ids": [task.task_id for task in tasks],
             "rollouts_per_task": rollouts_per_task,
             "model": local_config.model_dump(mode="json"),
@@ -1083,7 +1126,7 @@ async def run_wideseek_train_smoke(
         }
     )
     context = PhaseTransactionContext(
-        experiment_id=f"wideseek-train-smoke-{topology}",
+        experiment_id=experiment_id or f"wideseek-train-smoke-{topology}",
         config_digest=config_digest,
         rng_state=_rng_state(),
         sampler_state=canonical_digest(
@@ -1118,7 +1161,7 @@ async def run_wideseek_train_smoke(
         transaction_store=FilePhaseTransactionStore(transaction_dir),
     )
     result = await runner.run_cycle(
-        cycle_id=f"{split}-cycle-0",
+        cycle_id=f"{split}-cycle-{cycle_index}",
         tasks=tasks,
         transaction_context=context,
     )
@@ -1233,8 +1276,10 @@ async def run_wideseek_train_smoke(
         "comparable_to_official": False,
         "learning_signal_required": require_learning_signal,
         "environment_mode": environment_mode,
+        "experiment_id": context.experiment_id,
         "topology": topology,
         "split": split,
+        "cycle_index": cycle_index,
         "task_ids": [str(task.task_id) for task in tasks],
         "rollouts_per_task": rollouts_per_task,
         "model_id": local_config.model_id,
@@ -1292,6 +1337,7 @@ async def run_wideseek_train_smoke(
                 "policy_id": str(update.policy_id),
                 "base_optimizer_step": update.base_version.optimizer_step,
                 "trained_optimizer_step": update.trained_version.optimizer_step,
+                "checkpoint_id": str(update.checkpoint.checkpoint_id),
                 "checkpoint_digest": update.checkpoint.weight_version.checkpoint_digest,
                 "metrics": dict(update.metrics),
             }

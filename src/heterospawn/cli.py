@@ -573,8 +573,9 @@ def build_parser() -> argparse.ArgumentParser:
         default=Path("artifacts/wideseek-compliance/report.json"),
     )
     wideseek_train = subparsers.add_parser(
-        "wideseek-train-smoke",
-        help="run one short real-model WideSeek LoRA training cycle",
+        "wideseek-train-cycle",
+        aliases=("wideseek-train-smoke",),
+        help="run one versioned real-model WideSeek LoRA training cycle",
     )
     wideseek_train.add_argument(
         "--topology",
@@ -638,6 +639,21 @@ def build_parser() -> argparse.ArgumentParser:
             "restore one verified shared-policy checkpoint, or explicitly fork it into "
             "independent Main/Sub lineages, before the RL cycle"
         ),
+    )
+    wideseek_train.add_argument(
+        "--main-checkpoint-dir",
+        type=Path,
+        help="restore the verified Main checkpoint for independent continuation",
+    )
+    wideseek_train.add_argument(
+        "--sub-checkpoint-dir",
+        type=Path,
+        help="restore the verified Sub checkpoint for independent continuation",
+    )
+    wideseek_train.add_argument("--cycle-index", type=int, default=0)
+    wideseek_train.add_argument(
+        "--experiment-id",
+        help="stable experiment identity used by phase transactions",
     )
     wideseek_train.add_argument(
         "--do-sample",
@@ -724,6 +740,41 @@ def build_parser() -> argparse.ArgumentParser:
         "--report",
         type=Path,
         default=Path("artifacts/wideseek-train-smoke/recovery-report.json"),
+    )
+    wideseek_run = subparsers.add_parser(
+        "wideseek-run",
+        help="run or resume the canonical Qwen3 WideSeek SFT, RL, and evaluation pipeline",
+    )
+    wideseek_run.add_argument(
+        "--config",
+        type=Path,
+        default=Path("configs/wideseek-qwen3-4b-2080ti.json"),
+    )
+    wideseek_run.add_argument("--run-dir", type=Path, required=True)
+    wideseek_run.add_argument("--model-path", type=Path, required=True)
+    wideseek_run.add_argument(
+        "--model-manifest",
+        type=Path,
+        default=Path("manifests/qwen3-4b.json"),
+    )
+    wideseek_run.add_argument(
+        "--data-manifest",
+        type=Path,
+        default=Path("manifests/wideseek-train-data.json"),
+    )
+    wideseek_run.add_argument("--data-dir", type=Path, required=True)
+    wideseek_run.add_argument("--device", default="cuda:0")
+    wideseek_run.add_argument("--service-url", default="http://127.0.0.1:8000")
+    wideseek_run.add_argument("--qdrant-url", default="http://127.0.0.1:6333")
+    wideseek_run.add_argument(
+        "--allow-network",
+        action="store_true",
+        help="required only when the experiment config enables the MiniMax development Judge",
+    )
+    wideseek_run.add_argument(
+        "--resume",
+        action="store_true",
+        help="verify committed stage artifacts and continue at the first unfinished stage",
     )
     return parser
 
@@ -1061,11 +1112,30 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         print(json.dumps(report, ensure_ascii=False, sort_keys=True))
         return 0
-    if args.command == "wideseek-train-smoke":
+    if args.command in {"wideseek-train-cycle", "wideseek-train-smoke"}:
         if args.model_path is None and not args.allow_model_download:
             raise SystemExit("--allow-model-download is required when --model-path is omitted")
         if args.judge == "minimax-development" and not args.allow_network:
             raise SystemExit("--allow-network is required for MiniMax development Judge calls")
+        role_checkpoint_dirs = (args.main_checkpoint_dir, args.sub_checkpoint_dir)
+        if args.checkpoint_dir is not None and any(
+            path is not None for path in role_checkpoint_dirs
+        ):
+            raise SystemExit("--checkpoint-dir cannot be combined with role-specific checkpoints")
+        if any(path is not None for path in role_checkpoint_dirs) and not all(
+            path is not None for path in role_checkpoint_dirs
+        ):
+            raise SystemExit(
+                "independent continuation requires both --main-checkpoint-dir "
+                "and --sub-checkpoint-dir"
+            )
+        if (
+            any(path is not None for path in role_checkpoint_dirs)
+            and args.topology != "independent"
+        ):
+            raise SystemExit("role-specific checkpoints require --topology independent")
+        if args.cycle_index < 0:
+            raise SystemExit("--cycle-index cannot be negative")
         from heterospawn.training.wideseek_smoke import run_wideseek_train_smoke
 
         report = asyncio.run(
@@ -1091,6 +1161,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 transaction_dir=args.transaction_dir,
                 report_path=args.report,
                 checkpoint_dir=args.checkpoint_dir,
+                main_checkpoint_dir=args.main_checkpoint_dir,
+                sub_checkpoint_dir=args.sub_checkpoint_dir,
+                cycle_index=args.cycle_index,
+                experiment_id=args.experiment_id,
                 require_sub_update=args.require_sub_update,
                 require_learning_signal=args.require_learning_signal,
                 do_sample=args.do_sample,
@@ -1122,6 +1196,44 @@ def main(argv: Sequence[str] | None = None) -> int:
                 report_path=args.report,
                 require_learning_signal=args.require_learning_signal,
             )
+        )
+        print(json.dumps(report, ensure_ascii=False, sort_keys=True))
+        return 0
+    if args.command == "wideseek-run":
+        from heterospawn.experiments import (
+            WideSeekExperimentRunner,
+            WideSeekExperimentRuntime,
+            load_wideseek_experiment_config,
+        )
+
+        experiment_config = load_wideseek_experiment_config(args.config)
+        for path, label in (
+            (args.model_manifest, "model manifest"),
+            (args.data_manifest, "data manifest"),
+        ):
+            if not path.is_file():
+                raise SystemExit(f"{label} does not exist: {path}")
+        for path, label in (
+            (args.model_path, "model directory"),
+            (args.data_dir, "data directory"),
+        ):
+            if not path.is_dir():
+                raise SystemExit(f"{label} does not exist: {path}")
+        if experiment_config.judge_mode == "minimax-development" and not args.allow_network:
+            raise SystemExit("--allow-network is required by the configured development Judge")
+        runtime = WideSeekExperimentRuntime(
+            run_dir=args.run_dir,
+            model_path=args.model_path,
+            model_manifest_path=args.model_manifest,
+            data_manifest_path=args.data_manifest,
+            data_dir=args.data_dir,
+            device=args.device,
+            service_url=args.service_url,
+            qdrant_url=args.qdrant_url,
+            allow_network_judge=args.allow_network,
+        )
+        report = asyncio.run(
+            WideSeekExperimentRunner(experiment_config, runtime).run(resume=args.resume)
         )
         print(json.dumps(report, ensure_ascii=False, sort_keys=True))
         return 0

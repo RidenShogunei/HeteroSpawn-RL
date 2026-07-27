@@ -15,15 +15,16 @@ Use that guide as the operational source of truth.
 
 ## What works
 
-The repository can currently run:
+The repository can currently run, through one resumable command:
 
 1. verified asset download with official-to-mirror fallback;
 2. answer-safe role-targeted SFT construction and a bounded Qwen3-4B SFT warm start;
 3. real multi-round Main spawn and Sub Search/Access rollout against offline WideSeek;
-4. one shared-policy RL cycle or one independent Main-first fresh-alternating cycle;
+4. one or more shared-policy RL cycles and independent Main-first fresh-alternating cycles;
 5. exact token/log-probability training batches, immutable checkpoints, explicit rollout sync,
    and crash-safe phase recovery;
-6. update-free held-out comparison of the SFT, shared-RL, and independent-RL checkpoints.
+6. update-free held-out comparison of the SFT, shared-RL, and independent-RL checkpoints with
+   paired task-cluster uncertainty.
 
 This validates the architecture and training path. It does **not** reproduce WideSeek-R1's
 large-scale distributed training or establish a competitive benchmark score. The latest
@@ -75,6 +76,7 @@ Current Qwen3/WideSeek workflow:
 
 | Command | Purpose |
 | --- | --- |
+| `wideseek-run` | Run/resume the canonical SFT → shared/independent RL → evaluation experiment |
 | `wideseek-fetch-assets` | Download or verify pinned model, data, corpus, and retriever assets |
 | `wideseek-inspect-data` | Validate a WideSeek split without exposing references |
 | `wideseek-sft-dry-run` | Validate answer-safe role-targeted SFT construction |
@@ -82,12 +84,12 @@ Current Qwen3/WideSeek workflow:
 | `wideseek-rollout-smoke` | Run one real Search-to-Access environment probe |
 | `wideseek-compliance-baseline` | Evaluate base/shared/independent checkpoints with zero updates |
 | `wideseek-sft-train` | Run the bounded multi-step shared-policy SFT warm start |
-| `wideseek-train-smoke` | Run one shared or independent RL cycle |
+| `wideseek-train-cycle` | Run one versioned shared or independent RL cycle for diagnostics |
 | `wideseek-recover-phase` | Recover a durable optimizer phase without replaying rollout |
 
 Contract and historical diagnostics such as `local-contract-smoke`,
-`vllm-rollout-contract-smoke`, xbench, and API-backed commands remain available, but they
-are not part of the current Qwen3/WideSeek training recipe.
+`vllm-rollout-contract-smoke`, the compatibility alias `wideseek-train-smoke`, xbench, and
+API-backed commands remain available, but they are not the current Qwen3/WideSeek recipe.
 
 ## Documentation
 

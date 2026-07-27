@@ -249,3 +249,13 @@ This file records milestone-level events. Fine-grained work remains in GitHub is
   guidance from immutable ADR and validation history.
 - Added a validation-report index and removed one duplicate CLI parser test already covered by
   the LocalHF configuration suite.
+
+### Unified runnable experiment
+
+- Accepted ADR-0009 and replaced the manual checkpoint handoff recipe with one strict
+  `wideseek-run` experiment: SFT, shared RL, independent Main/Sub RL, identical held-out
+  evaluation, and paired task-cluster comparison.
+- Added a committed Qwen3-4B/2080 Ti experiment profile, atomic stage state, report/checkpoint
+  digest verification, cycle-boundary resume, and independent checkpoint-pair continuation.
+- Kept phase transactions as the inner recovery boundary and stage commands as diagnostics; the
+  latest clean repository plus the canonical config is now the sole operational version.
