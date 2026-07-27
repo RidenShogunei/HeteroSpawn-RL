@@ -137,9 +137,30 @@ To evaluate an existing shared-policy LocalHF checkpoint without another optimiz
 The command reconstructs the checkpoint identity from its canonical manifest, verifies the
 checkpoint and base-model files, restores optimizer/RNG state, and explicitly synchronizes the
 rollout adapter. The safe report records the loaded policy, optimizer step, checkpoint digest,
-configured sequence limits, and aggregate prompt/response token-count percentiles. One checkpoint
-directory currently applies only to `--topology shared`; independent Main/Sub evaluation requires
-an explicit two-checkpoint interface rather than an inferred role mapping.
+configured sequence limits, and aggregate prompt/response token-count percentiles.
+
+Evaluate independent Main/Sub checkpoints without another optimizer update by supplying both
+role-specific identities:
+
+```bash
+heterospawn wideseek-compliance-baseline \
+  --topology independent \
+  --main-checkpoint-dir /absolute/path/to/main_step-N_<digest> \
+  --sub-checkpoint-dir /absolute/path/to/sub_step-N_<digest> \
+  --data-dir "$HOME/heterospawn-runtime/wideseek/train-data" \
+  --model-profile qwen3-4b \
+  --model-path "$HOME/heterospawn-runtime/models/Qwen3-4B" \
+  --model-manifest manifests/qwen3-4b.json \
+  --device cuda:0 \
+  --max-sequence-length 4096 \
+  --max-new-tokens 1024 \
+  --do-sample \
+  --report "$HOME/heterospawn-runtime/results/independent-compliance/report.json"
+```
+
+Both arguments are mandatory and mutually exclusive with `--checkpoint-dir`. The loader rejects
+a role mismatch rather than inferring Main/Sub from paths or prompts. Each checkpoint is verified,
+restored, and synchronized independently before the immutable rollout snapshot is published.
 
 Use repeated `--task split:index` arguments to run an explicitly recorded alternative selection,
 and `--rollouts-per-task` to change the repeat count. Selection changes are reflected in the
@@ -194,8 +215,8 @@ checkpoint-only compliance, restores optimizer/RNG state, and explicitly synchro
 weights before the first system rollout. The initial `WeightVersion` is bound into the config and
 phase-transaction identities. `--require-learning-signal` writes the safe report and then fails
 the command unless at least one reward group is non-degenerate, advantages are non-zero, the
-gradient is finite and non-zero, and the target adapter changes. One checkpoint directory applies
-only to `--topology shared`; independent initialization needs an explicit policy-fork contract.
+gradient is finite and non-zero, and the target adapter changes. In the independent topology, the
+same shared checkpoint is accepted only through the explicit ADR-0008 policy-fork contract.
 
 If the process crashes after the phase input is durable but before commit publication, recover
 the existing transaction without replaying Search/Access or model sampling:
