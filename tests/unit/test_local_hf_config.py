@@ -216,6 +216,25 @@ def test_wideseek_compliance_exposes_checkpoint_only_rollout() -> None:
     assert args.max_sequence_length == 8192
 
 
+def test_wideseek_compliance_exposes_independent_checkpoint_pair() -> None:
+    args = build_parser().parse_args(
+        [
+            "wideseek-compliance-baseline",
+            "--topology",
+            "independent",
+            "--model-path",
+            "model",
+            "--main-checkpoint-dir",
+            "main",
+            "--sub-checkpoint-dir",
+            "sub",
+        ]
+    )
+
+    assert args.main_checkpoint_dir == Path("main")
+    assert args.sub_checkpoint_dir == Path("sub")
+
+
 def test_wideseek_recovery_cli_exposes_durable_phase_identity() -> None:
     args = build_parser().parse_args(
         [
