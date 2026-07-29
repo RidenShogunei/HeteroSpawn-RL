@@ -10,7 +10,13 @@ from heterospawn.domain.ids import PolicyId, TaskId
 from heterospawn.domain.training import canonical_digest
 from heterospawn.domain.versions import AgentRole, WeightVersion
 
-SupervisedBehavior = Literal["main_final", "sub_summary"]
+SupervisedBehavior = Literal[
+    "main_spawn",
+    "main_final",
+    "sub_search",
+    "sub_access",
+    "sub_summary",
+]
 
 
 class SupervisedPromptEncoding(BaseModel):
@@ -67,7 +73,7 @@ class SupervisedTrainingExample(BaseModel):
 
     @model_validator(mode="after")
     def role_mask_and_digest_must_match(self) -> SupervisedTrainingExample:
-        expected_role: AgentRole = "main" if self.behavior == "main_final" else "sub"
+        expected_role: AgentRole = "main" if self.behavior.startswith("main_") else "sub"
         if self.agent_role != expected_role:
             raise ValueError("supervised behavior does not match agent role")
         prompt_length = len(self.encoding.prompt_ids)

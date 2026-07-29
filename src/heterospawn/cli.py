@@ -394,6 +394,12 @@ def build_parser() -> argparse.ArgumentParser:
     wideseek_sft_train.add_argument("--max-new-tokens", type=int, default=512)
     wideseek_sft_train.add_argument("--max-workers", type=int, default=4)
     wideseek_sft_train.add_argument(
+        "--constructor-mode",
+        choices=("role-v1", "grounded-v2"),
+        default="role-v1",
+        help="role-v1: format warm start; grounded-v2: full spawn/search/access/summary/final",
+    )
+    wideseek_sft_train.add_argument(
         "--run-compliance",
         action="store_true",
         help="run the fixed held-out 16-task profile after replacement restore",
@@ -999,6 +1005,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 compliance_report_path=(args.compliance_report if args.run_compliance else None),
                 service_url=args.service_url,
                 qdrant_url=args.qdrant_url,
+                constructor_mode=args.constructor_mode,
             )
         )
         print(json.dumps(report, ensure_ascii=False, sort_keys=True))

@@ -20,11 +20,18 @@ from heterospawn.domain.ids import AgentInstanceId, EpisodeId, PolicyId, Rollout
 from heterospawn.domain.supervised import SupervisedTrainingExample
 from heterospawn.domain.training import GenerationRequest, canonical_digest
 from heterospawn.errors import ConfigurationError, RolloutRevisionMismatch
+from heterospawn.search.wideseek_local import WideSeekLocalConfig, WideSeekLocalToolService
 from heterospawn.training.wideseek_sft import (
     WideSeekRoleSftConstructor,
     build_supervised_training_batch,
     materialize_supervised_conversations,
 )
+from heterospawn.training.wideseek_sft_grounded import (
+    WIDESEEK_GROUNDED_SFT_CONSTRUCTOR_SCHEMA,
+    WideSeekGroundedFullSftConstructor,
+)
+
+SftConstructorMode = str
 
 
 @dataclass(frozen=True)
@@ -50,9 +57,12 @@ async def run_wideseek_sft_smoke(
     epochs: int = 1,
     training_max_sequence_length: int | None = None,
     exclude_compliance_selection: bool = False,
+    constructor_mode: SftConstructorMode = "role-v1",
 ) -> dict[str, Any]:
     """Run a bounded shared-policy SFT schedule without persisting plaintext examples."""
 
+    if constructor_mode not in {"role-v1", "grounded-v2"}:
+        raise ValueError("constructor_mode must be role-v1 or grounded-v2")
     if task_indices and len(set(task_indices)) != len(task_indices):
         raise ValueError("SFT task indices must be unique")
     if not task_indices and task_limit < 1:
@@ -103,11 +113,18 @@ async def run_wideseek_sft_smoke(
     base_revision = backend.rollout_revision(policy_id)
     train_hash_before = backend.adapter_hash(policy_id)
     rollout_hash_before = backend.adapter_hash(policy_id, rollout=True)
-    task_groups, skipped_overlength = _materialize_task_groups(
+    tools: WideSeekLocalToolService | None = None
+    if constructor_mode == "grounded-v2":
+        tools = WideSeekLocalToolService(
+            WideSeekLocalConfig(service_url=service_url, qdrant_url=qdrant_url)
+        )
+    task_groups, skipped_overlength, grounding_stats = await _materialize_task_groups(
         dataset=dataset,
         explicit_task_indices=task_indices,
         task_limit=task_limit,
-        constructor=WideSeekRoleSftConstructor(max_workers=max_workers),
+        constructor_mode=constructor_mode,
+        max_workers=max_workers,
+        tools=tools,
         codec=backend.prompt_encoder,
         training_max_sequence_length=training_sequence_limit,
         exclude_compliance=heldout_isolation,
@@ -217,8 +234,13 @@ async def run_wideseek_sft_smoke(
         peak_bytes = int(torch.cuda.max_memory_allocated())
 
     behaviors = {example.behavior for example in examples}
+    expected_behaviors = (
+        {"main_spawn", "main_final", "sub_search", "sub_access", "sub_summary"}
+        if constructor_mode == "grounded-v2"
+        else {"main_final", "sub_summary"}
+    )
     checks = {
-        "both_behaviors_present": behaviors == {"main_final", "sub_summary"},
+        "both_behaviors_present": behaviors == expected_behaviors,
         "target_only_masks": all(
             example.loss_mask
             == (0,) * len(example.encoding.prompt_ids) + (1,) * len(example.encoding.target_ids)
@@ -277,10 +299,20 @@ async def run_wideseek_sft_smoke(
         }
 
     report: dict[str, Any] = {
-        "schema_revision": "heterospawn-wideseek-sft-smoke-v2",
+        "schema_revision": (
+            "heterospawn-wideseek-sft-smoke-v3"
+            if constructor_mode == "grounded-v2"
+            else "heterospawn-wideseek-sft-smoke-v2"
+        ),
         "status": "passed",
         "comparable_to_official": False,
         "training_scope": "bounded-shared-policy-sft-schedule",
+        "constructor_mode": constructor_mode,
+        "constructor_schema": (
+            WIDESEEK_GROUNDED_SFT_CONSTRUCTOR_SCHEMA
+            if constructor_mode == "grounded-v2"
+            else "heterospawn-wideseek-role-sft-v1"
+        ),
         "dataset_revision": dataset.revision,
         "source_digest": dataset.source_digest,
         "split": split,
@@ -288,6 +320,7 @@ async def run_wideseek_sft_smoke(
         "selected_task_count": len(selected_task_indices),
         "heldout_compliance_selection_excluded": heldout_isolation,
         "skipped_overlength_task_indices": list(skipped_overlength),
+        "grounding": grounding_stats,
         "training_max_sequence_length": training_sequence_limit,
         "rollout_max_sequence_length": local_config.max_sequence_length,
         "tasks_per_step": effective_tasks_per_step,
@@ -346,28 +379,58 @@ async def run_wideseek_sft_smoke(
     return report
 
 
-def _materialize_task_groups(
+async def _materialize_task_groups(
     *,
     dataset: Any,
     explicit_task_indices: tuple[int, ...],
     task_limit: int,
-    constructor: WideSeekRoleSftConstructor,
+    constructor_mode: SftConstructorMode,
+    max_workers: int,
+    tools: WideSeekLocalToolService | None,
     codec: Any,
     training_max_sequence_length: int,
     exclude_compliance: bool,
-) -> tuple[tuple[_TaskExamples, ...], tuple[int, ...]]:
+    grounding_concurrency: int = 8,
+) -> tuple[tuple[_TaskExamples, ...], tuple[int, ...], dict[str, Any] | None]:
     if explicit_task_indices:
         candidates = explicit_task_indices
         required_count = len(explicit_task_indices)
+        allow_partial = False
     else:
         held_out = _compliance_indices(dataset.split) if exclude_compliance else set()
         candidates = tuple(index for index in range(len(dataset.tasks)) if index not in held_out)
         required_count = task_limit
+        allow_partial = constructor_mode == "grounded-v2"
+
+    role_constructor = WideSeekRoleSftConstructor(max_workers=max_workers)
+    grounded_constructor = (
+        WideSeekGroundedFullSftConstructor(max_workers=max_workers)
+        if constructor_mode == "grounded-v2"
+        else None
+    )
+    if constructor_mode == "grounded-v2" and tools is None:
+        raise ValueError("grounded-v2 SFT requires an offline ResearchToolService")
+    if grounding_concurrency < 1:
+        raise ValueError("grounding_concurrency must be positive")
 
     groups: list[_TaskExamples] = []
     skipped: list[int] = []
-    for task_index in candidates:
-        construction = constructor.build(dataset, task_indices=(task_index,))
+    attempted = 0
+    ungrounded = 0
+
+    async def _one(task_index: int) -> tuple[str, int, _TaskExamples | None]:
+        if constructor_mode == "grounded-v2":
+            assert grounded_constructor is not None
+            assert tools is not None
+            construction = await grounded_constructor.try_build_task(
+                dataset,
+                task_index=task_index,
+                tools=tools,
+            )
+            if construction is None:
+                return ("ungrounded", task_index, None)
+        else:
+            construction = role_constructor.build(dataset, task_indices=(task_index,))
         examples = materialize_supervised_conversations(
             construction.conversations,
             codec,
@@ -377,20 +440,67 @@ def _materialize_task_groups(
             for example in examples
         )
         if longest > training_max_sequence_length:
-            if explicit_task_indices:
-                raise ValueError(
-                    f"SFT task index {task_index} exceeds training_max_sequence_length"
-                )
-            skipped.append(task_index)
-            continue
-        groups.append(_TaskExamples(task_index=task_index, examples=examples))
-        if not explicit_task_indices and len(groups) == required_count:
-            break
-    if len(groups) != required_count:
+            return ("overlength", task_index, None)
+        return ("kept", task_index, _TaskExamples(task_index=task_index, examples=examples))
+
+    if constructor_mode == "grounded-v2" and not explicit_task_indices:
+        cursor = 0
+        while cursor < len(candidates) and len(groups) < required_count:
+            chunk = candidates[cursor : cursor + grounding_concurrency]
+            cursor += len(chunk)
+            attempted += len(chunk)
+            outcomes = await asyncio.gather(*(_one(index) for index in chunk))
+            for status, task_index, group in outcomes:
+                if status == "ungrounded":
+                    ungrounded += 1
+                elif status == "overlength":
+                    skipped.append(task_index)
+                elif group is not None and len(groups) < required_count:
+                    groups.append(group)
+            if len(groups) >= required_count:
+                break
+    else:
+        for task_index in candidates:
+            attempted += 1
+            status, _, group = await _one(task_index)
+            if status == "ungrounded":
+                ungrounded += 1
+                if explicit_task_indices:
+                    raise ValueError(f"SFT task index {task_index} could not be grounded")
+                continue
+            if status == "overlength":
+                if explicit_task_indices:
+                    raise ValueError(
+                        f"SFT task index {task_index} exceeds training_max_sequence_length"
+                    )
+                skipped.append(task_index)
+                continue
+            assert group is not None
+            groups.append(group)
+            if not explicit_task_indices and len(groups) == required_count:
+                break
+
+    if explicit_task_indices and len(groups) != required_count:
         raise ValueError(
             f"only {len(groups)} eligible SFT tasks were found; required {required_count}"
         )
-    return tuple(groups), tuple(skipped)
+    if not explicit_task_indices and len(groups) != required_count:
+        if not allow_partial or len(groups) < 1:
+            raise ValueError(
+                f"only {len(groups)} eligible SFT tasks were found; required {required_count}"
+            )
+    grounding_stats: dict[str, Any] | None = None
+    if constructor_mode == "grounded-v2":
+        grounding_stats = {
+            "attempted_tasks": attempted,
+            "grounded_tasks": len(groups) + len(skipped),
+            "kept_tasks": len(groups),
+            "ungrounded_tasks": ungrounded,
+            "skipped_overlength_tasks": len(skipped),
+            "keep_rate": (len(groups) / attempted) if attempted else 0.0,
+            "grounding_concurrency": grounding_concurrency,
+        }
+    return tuple(groups), tuple(skipped), grounding_stats
 
 
 def _planned_task_batches(
@@ -485,7 +595,8 @@ async def _stale_revision_rejected(
 
 def _role_token_stats(examples: tuple[Any, ...]) -> dict[str, dict[str, int]]:
     result: dict[str, dict[str, int]] = {}
-    for behavior in ("main_final", "sub_summary"):
+    behaviors = sorted({example.behavior for example in examples})
+    for behavior in behaviors:
         selected = tuple(example for example in examples if example.behavior == behavior)
         if not selected:
             continue

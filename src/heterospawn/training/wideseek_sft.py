@@ -65,6 +65,12 @@ class WideSeekSftConstructionSummary(BaseModel):
     examples: int = Field(ge=2)
     main_final_examples: int = Field(ge=1)
     sub_summary_examples: int = Field(ge=1)
+    main_spawn_examples: int = Field(default=0, ge=0)
+    sub_search_examples: int = Field(default=0, ge=0)
+    sub_access_examples: int = Field(default=0, ge=0)
+    attempted_tasks: int | None = Field(default=None, ge=0)
+    grounded_tasks: int | None = Field(default=None, ge=0)
+    ungrounded_tasks: int | None = Field(default=None, ge=0)
     worker_count_histogram: tuple[tuple[int, int], ...]
     plaintext_lifecycle: str = "memory-only until exact token materialization"
 

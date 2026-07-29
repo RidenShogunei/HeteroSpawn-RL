@@ -9,12 +9,14 @@ from heterospawn.search.base import (
     SearchResponse,
     SearchService,
 )
+from heterospawn.search.browsecomp_plus_local import BrowseCompPlusLocalTools
 from heterospawn.search.minimax_mcp import (
     MiniMaxMcpConfig,
     MiniMaxMcpSearchService,
     StdioMiniMaxMcpTransport,
 )
 from heterospawn.search.mock import MockSearchService
+from heterospawn.search.serper_jina import SerperJinaConfig, SerperJinaResearchTools
 from heterospawn.search.tavily import TavilyConfig, TavilySearchService
 from heterospawn.search.wideseek_local import (
     WideSeekEnvironmentIdentity,
@@ -26,6 +28,7 @@ from heterospawn.search.wideseek_local import (
 __all__ = [
     "AccessRequest",
     "AccessResponse",
+    "BrowseCompPlusLocalTools",
     "MiniMaxMcpConfig",
     "MiniMaxMcpSearchService",
     "MockSearchService",
@@ -34,6 +37,8 @@ __all__ = [
     "SearchRequest",
     "SearchResponse",
     "SearchService",
+    "SerperJinaConfig",
+    "SerperJinaResearchTools",
     "StdioMiniMaxMcpTransport",
     "TavilyConfig",
     "TavilySearchService",

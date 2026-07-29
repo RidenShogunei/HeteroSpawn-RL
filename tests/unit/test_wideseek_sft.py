@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 from pathlib import Path
@@ -18,11 +19,13 @@ from heterospawn.domain.supervised import (
 )
 from heterospawn.domain.versions import WeightVersion
 from heterospawn.orchestration.wideseek_actions import parse_main_turn, parse_sub_turn
+from heterospawn.search.base import AccessRequest, AccessResponse, SearchItem, SearchRequest, SearchResponse
 from heterospawn.training.wideseek_sft import (
     WideSeekRoleSftConstructor,
     build_supervised_training_batch,
     materialize_supervised_conversations,
 )
+from heterospawn.training.wideseek_sft_grounded import WideSeekGroundedFullSftConstructor
 from heterospawn.training.wideseek_sft_smoke import (
     _materialize_task_groups,
     _planned_task_batches,
@@ -297,18 +300,23 @@ def test_automatic_sft_selection_excludes_compliance_indices(tmp_path: Path) -> 
         expected_sha256=digest,
     )
 
-    groups, skipped = _materialize_task_groups(
-        dataset=dataset,
-        explicit_task_indices=(),
-        task_limit=1,
-        constructor=WideSeekRoleSftConstructor(max_workers=2),
-        codec=_DeterministicSupervisedCodec(),
-        training_max_sequence_length=100_000,
-        exclude_compliance=True,
+    groups, skipped, grounding = asyncio.run(
+        _materialize_task_groups(
+            dataset=dataset,
+            explicit_task_indices=(),
+            task_limit=1,
+            constructor_mode="role-v1",
+            max_workers=2,
+            tools=None,
+            codec=_DeterministicSupervisedCodec(),
+            training_max_sequence_length=100_000,
+            exclude_compliance=True,
+        )
     )
 
     assert tuple(group.task_index for group in groups) == (1,)
     assert skipped == ()
+    assert grounding is None
 
 
 def test_sft_readiness_gate_requires_spawn_retention() -> None:
@@ -333,3 +341,101 @@ def test_sft_readiness_gate_requires_spawn_retention() -> None:
         "contract_checks_passed": True,
     }
     assert gate["passed"] is False
+
+
+class _GroundingTools:
+    def __init__(self, *, support_tokens: tuple[str, ...]) -> None:
+        self._support = " ".join(support_tokens)
+
+    async def search(self, request: SearchRequest) -> SearchResponse:
+        return SearchResponse(
+            request_id=request.request_id,
+            provider="fixture",
+            provider_revision="0" * 64,
+            provider_request_id="fixture",
+            query=request.query,
+            results=(
+                SearchItem(
+                    title="fixture",
+                    url="wideseek://fixture/doc-1",
+                    content=f"snippet about {self._support}",
+                    score=0.9,
+                ),
+            ),
+            credits=0,
+            raw_response_digest="a" * 64,
+        )
+
+    async def access(self, request: AccessRequest) -> AccessResponse:
+        return AccessResponse(
+            request_id=request.request_id,
+            provider="fixture",
+            provider_revision="0" * 64,
+            provider_request_id="fixture",
+            url=request.url,
+            content=f"Full page evidence containing {self._support} and surrounding context.",
+            truncated=False,
+            raw_response_digest="b" * 64,
+        )
+
+
+def test_grounded_full_behavior_construction_covers_five_targets(tmp_path: Path) -> None:
+    path = tmp_path / "hybrid_20k.jsonl"
+    digest, sentinel = _write_hybrid_fixture(path)
+    dataset = load_wideseek_dataset(
+        path,
+        split="hybrid_20k",
+        expected_sha256=digest,
+    )
+    constructor = WideSeekGroundedFullSftConstructor(max_workers=2, overlap_ratio=0.2, min_token_hits=1)
+    tools = _GroundingTools(support_tokens=(sentinel, "FACT", "Name", "Value"))
+
+    first = asyncio.run(constructor.build(dataset, task_indices=(0, 1), tools=tools))
+    second = asyncio.run(constructor.build(dataset, task_indices=(0, 1), tools=tools))
+
+    assert first.summary.constructor_revision == second.summary.constructor_revision
+    assert first.summary.schema_revision == "heterospawn-wideseek-role-sft-v2"
+    assert first.summary.grounded_tasks == 2
+    assert first.summary.main_spawn_examples == 2
+    assert first.summary.sub_search_examples >= 2
+    assert first.summary.sub_access_examples >= 2
+    assert {item.behavior for item in first.conversations} == {
+        "main_spawn",
+        "main_final",
+        "sub_search",
+        "sub_access",
+        "sub_summary",
+    }
+    assert sentinel not in first.summary.model_dump_json()
+
+    for conversation in first.conversations:
+        if conversation.behavior == "main_spawn":
+            assert parse_main_turn(conversation.target).kind == "spawn"
+            assert len(conversation.messages) == 2
+        elif conversation.behavior == "sub_search":
+            assert parse_sub_turn(conversation.target).kind == "tools"
+            assert len(conversation.messages) == 2
+        elif conversation.behavior == "sub_access":
+            assert parse_sub_turn(conversation.target).kind == "tools"
+            assert len(conversation.messages) == 4
+        elif conversation.behavior == "sub_summary":
+            assert "<tool_call>" not in conversation.target
+            assert len(conversation.messages) == 6
+        else:
+            assert conversation.behavior == "main_final"
+            assert "<tool_call>" not in conversation.target
+
+
+def test_grounded_constructor_rejects_unsupported_evidence(tmp_path: Path) -> None:
+    path = tmp_path / "hybrid_20k.jsonl"
+    digest, _ = _write_hybrid_fixture(path)
+    dataset = load_wideseek_dataset(
+        path,
+        split="hybrid_20k",
+        expected_sha256=digest,
+    )
+    constructor = WideSeekGroundedFullSftConstructor(max_workers=2)
+    tools = _GroundingTools(support_tokens=("zzzz-unrelated-token",))
+
+    result = asyncio.run(constructor.try_build_task(dataset, task_index=1, tools=tools))
+    assert result is None
